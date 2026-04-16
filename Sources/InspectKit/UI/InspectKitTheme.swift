@@ -43,7 +43,7 @@ enum NIColor {
 enum NIFont {
     static let mono         = Font.system(.footnote, design: .monospaced)
     static let monoSemibold = Font.system(size: 12, weight: .semibold, design: .monospaced)
-    static let monoSmall    = Font.system(.caption2, design: .monospaced)
+    static let monoSmall    = Font.system(.caption, design: .monospaced)
     static let badge        = Font.system(size: 11, weight: .bold, design: .rounded)
     static let sectionTitle = Font.system(size: 15, weight: .semibold, design: .rounded)
     /// Replaces `.footnote.weight(.semibold)` — Font.weight is iOS 14+
