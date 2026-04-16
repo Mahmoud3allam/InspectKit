@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -E \"\\\\.\\(md|plist\\)$\")",
+      "Bash(find . -type f \\\\\\( -name \"*.swift\" -o -name \"*.md\" \\\\\\) -exec grep -l \"NetworkInspector\" {} \\\\;)",
+      "Bash(swift package *)"
+    ]
+  }
+}
