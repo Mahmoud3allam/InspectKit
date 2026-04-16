@@ -45,10 +45,32 @@ public final class InspectKitURLProtocol: URLProtocol {
     // MARK: - URLProtocol plumbing
 
     public override class func canInit(with request: URLRequest) -> Bool {
-        guard isActive else { return false }
-        if InspectKitRequestMarker.isHandled(request) { return false }
-        guard let scheme = request.url?.scheme?.lowercased() else { return false }
-        guard scheme == "http" || scheme == "https" else { return false }
+        let url = request.url?.absoluteString ?? "unknown"
+        print("🔵 [InspectKit] canInit called for: \(url)")
+
+        guard isActive else {
+            print("   ❌ Not active (isActive=\(isActive))")
+            return false
+        }
+        print("   ✓ isActive=true")
+
+        if InspectKitRequestMarker.isHandled(request) {
+            print("   ❌ Already handled")
+            return false
+        }
+        print("   ✓ Not already handled")
+
+        guard let scheme = request.url?.scheme?.lowercased() else {
+            print("   ❌ No scheme")
+            return false
+        }
+        print("   ✓ Scheme: \(scheme)")
+
+        guard scheme == "http" || scheme == "https" else {
+            print("   ❌ Not http/https")
+            return false
+        }
+        print("   ✅ WILL INTERCEPT")
         return true
     }
 
@@ -70,15 +92,20 @@ public final class InspectKitURLProtocol: URLProtocol {
     // MARK: - Lifecycle
 
     public override func startLoading() {
+        let url = self.request.url?.absoluteString ?? "unknown"
+        print("🟢 [InspectKit] startLoading called for: \(url)")
+
         let original = self.request
         let recordID = beginInspection(for: original)
         self.recordID = recordID
+        print("   ✓ Created record ID: \(recordID?.uuidString ?? "nil")")
 
         let forwarded = InspectKitRequestMarker.mark(original, recordID: recordID)
         let task = Self.forwardingSession.dataTask(with: forwarded)
         Self.delegateProxy.register(self, for: task)
         self.dataTask = task
         task.resume()
+        print("   ✅ Task resumed")
     }
 
     public override func stopLoading() {

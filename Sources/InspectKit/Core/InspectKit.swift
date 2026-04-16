@@ -40,11 +40,23 @@ public final class InspectKit {
     }
 
     public func start() {
-        guard configuration.isEnabled, !isRunning else { return }
+        print("📍 [InspectKit] start() called")
+        guard configuration.isEnabled, !isRunning else {
+            print("   ⚠️ Skipped: isEnabled=\(configuration.isEnabled), isRunning=\(isRunning)")
+            return
+        }
+        print("   ✓ Enabling InspectKitURLProtocol...")
         InspectKitURLProtocol.isActive = true
+        print("   ✓ isActive set to: \(InspectKitURLProtocol.isActive)")
+
+        print("   ✓ Registering URLProtocol globally...")
         URLProtocol.registerClass(InspectKitURLProtocol.self)
+
+        print("   ✓ Installing auto-capture swizzles...")
         InspectKitAutoCapture.install()
+
         isRunning = true
+        print("✅ [InspectKit] start() completed successfully")
     }
 
     public func stop() {
