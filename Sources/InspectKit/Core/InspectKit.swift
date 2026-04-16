@@ -43,6 +43,7 @@ public final class InspectKit {
         guard configuration.isEnabled, !isRunning else { return }
         InspectKitURLProtocol.isActive = true
         URLProtocol.registerClass(InspectKitURLProtocol.self)
+        InspectKitAutoCapture.install()
         isRunning = true
     }
 
