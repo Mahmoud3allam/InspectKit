@@ -19,10 +19,7 @@ let package = Package(
         .target(
             name: "InspectKit",
             dependencies: [],
-            path: "Sources/InspectKit",
-            swiftSettings: [
-                .unsafeFlags(["-suppress-warnings"], .when(configuration: .debug))
-            ]
+            path: "Sources/InspectKit"
         )
     ]
 )

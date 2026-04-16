@@ -4,53 +4,76 @@ import ObjectiveC
 enum InspectKitAutoCapture {
     private static var isInstalled = false
 
-    /// Installs the method swizzle that injects InspectKitURLProtocol
-    /// into all URLSessionConfiguration instances created after this call.
+    /// Installs swizzles to inject InspectKit into URLSessionConfiguration.default
+    /// and URLSessionConfiguration.ephemeral — the two most common entry points.
     static func install() {
         guard !isInstalled else { return }
-        swizzleProtocolClassesGetter()
+        swizzleDefaultConfiguration()
+        swizzleEphemeralConfiguration()
         isInstalled = true
     }
 
-    private static func swizzleProtocolClassesGetter() {
-        // The real backing class for all URLSessionConfiguration instances.
-        // Falls back to the abstract base if the private class is unavailable.
-        let configClass: AnyClass =
-            NSClassFromString("__NSCFURLSessionConfiguration")
-            ?? NSClassFromString("NSURLSessionConfiguration")
-            ?? URLSessionConfiguration.self
+    private static func swizzleDefaultConfiguration() {
+        let cls = URLSessionConfiguration.self
+        let selector = #selector(getter: URLSessionConfiguration.default)
 
-        let origSel = NSSelectorFromString("protocolClasses")
-        let newSel  = NSSelectorFromString("ik_protocolClasses")
+        guard let method = class_getClassMethod(cls, selector) else {
+            print("[InspectKit] Warning: Could not find URLSessionConfiguration.default")
+            return
+        }
 
-        // Add our replacement method (defined in the extension below) to the real class.
-        guard let newMethod = class_getInstanceMethod(URLSessionConfiguration.self, newSel) else { return }
-        class_addMethod(configClass, newSel,
-                        method_getImplementation(newMethod),
-                        method_getTypeEncoding(newMethod))
+        let originalImp = method_getImplementation(method)
 
-        // Swap implementations.
-        guard
-            let origMethod = class_getInstanceMethod(configClass, origSel),
-            let addedMethod = class_getInstanceMethod(configClass, newSel)
-        else { return }
+        let block: @convention(block) () -> URLSessionConfiguration = {
+            // Call the original getter
+            typealias DefaultGetter = @convention(c) (AnyClass, Selector) -> URLSessionConfiguration
+            let getterFunc = unsafeBitCast(originalImp, to: DefaultGetter.self)
+            let config = getterFunc(cls, selector)
 
-        method_exchangeImplementations(origMethod, addedMethod)
+            // Inject InspectKit into the protocol classes
+            guard InspectKitURLProtocol.isActive else { return config }
+            var classes = config.protocolClasses ?? []
+            if !classes.contains(where: { $0 == InspectKitURLProtocol.self }) {
+                classes.append(InspectKitURLProtocol.self)
+                config.protocolClasses = classes
+            }
+            return config
+        }
+
+        let newImp = imp_implementationWithBlock(block as Any)
+        method_setImplementation(method, newImp)
+        print("[InspectKit] ✓ Swizzled URLSessionConfiguration.default")
     }
-}
 
-extension URLSessionConfiguration {
-    /// Swizzled replacement for `protocolClasses`.
-    ///
-    /// After `method_exchangeImplementations`, calling `self.ik_protocolClasses()`
-    /// invokes the ORIGINAL `protocolClasses` getter (implementations are swapped).
-    ///
-    /// InspectKit is appended LAST (not prepended) so all existing URLProtocol subclasses
-    /// in the user's project run first, unaffected.
-    @objc func ik_protocolClasses() -> [AnyClass] {
-        let original = self.ik_protocolClasses()   // calls original getter (swapped)
-        guard InspectKitURLProtocol.isActive else { return original }
-        guard !original.contains(where: { $0 == InspectKitURLProtocol.self }) else { return original }
-        return original + [InspectKitURLProtocol.self]  // append LAST, not prepend
+    private static func swizzleEphemeralConfiguration() {
+        let cls = URLSessionConfiguration.self
+        let selector = #selector(getter: URLSessionConfiguration.ephemeral)
+
+        guard let method = class_getClassMethod(cls, selector) else {
+            print("[InspectKit] Warning: Could not find URLSessionConfiguration.ephemeral")
+            return
+        }
+
+        let originalImp = method_getImplementation(method)
+
+        let block: @convention(block) () -> URLSessionConfiguration = {
+            // Call the original getter
+            typealias EphemeralGetter = @convention(c) (AnyClass, Selector) -> URLSessionConfiguration
+            let getterFunc = unsafeBitCast(originalImp, to: EphemeralGetter.self)
+            let config = getterFunc(cls, selector)
+
+            // Inject InspectKit into the protocol classes
+            guard InspectKitURLProtocol.isActive else { return config }
+            var classes = config.protocolClasses ?? []
+            if !classes.contains(where: { $0 == InspectKitURLProtocol.self }) {
+                classes.append(InspectKitURLProtocol.self)
+                config.protocolClasses = classes
+            }
+            return config
+        }
+
+        let newImp = imp_implementationWithBlock(block as Any)
+        method_setImplementation(method, newImp)
+        print("[InspectKit] ✓ Swizzled URLSessionConfiguration.ephemeral")
     }
 }
