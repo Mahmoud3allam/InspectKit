@@ -52,11 +52,12 @@ public final class InspectKit {
         print("   ✓ Registering URLProtocol globally...")
         URLProtocol.registerClass(InspectKitURLProtocol.self)
 
-        print("   ✓ Installing auto-capture swizzles...")
-        InspectKitAutoCapture.install()
+        // TEMPORARILY DISABLED: Testing if global registration alone works
+        // print("   ✓ Installing auto-capture swizzles...")
+        // InspectKitAutoCapture.install()
 
         isRunning = true
-        print("✅ [InspectKit] start() completed successfully")
+        print("✅ [InspectKit] start() completed successfully (swizzle DISABLED for testing)")
     }
 
     public func stop() {
