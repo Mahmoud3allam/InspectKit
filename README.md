@@ -421,3 +421,11 @@ InspectKit.shared.start()  // no-op if isEnabled is false
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+## Created by
+
+**Mahmoud Allam**
+
+InspectKit is a comprehensive network debugging tool designed to streamline iOS development and testing workflows.
