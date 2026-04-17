@@ -5,8 +5,6 @@ public struct InspectKitDashboardView: View {
     @State private var query: String = ""
     @State private var stateFilter: InspectKitStore.StateFilter = .all
     @State private var methodFilter: Set<HTTPMethod> = []
-    @State private var showShare = false
-    @State private var exportedFileURL: URL?
 
     public var onDismiss: (() -> Void)?
 
@@ -41,11 +39,8 @@ public struct InspectKitDashboardView: View {
                         .font(NIFont.footnoteSemibold)
                 },
                 trailing: HStack(spacing: 16) {
-                    if InspectKit.shared.configuration.allowsExport {
-                        Button(action: exportSession) {
-                            Image(systemName: "square.and.arrow.up")
-                        }
-                        .disabled(store.records.isEmpty)
+                    NavigationLink(destination: SpeedTestView()) {
+                        Image(systemName: "bolt.fill")
                     }
                     // Button(role:) is iOS 15+; plain Button is iOS 13+
                     Button(action: { store.clear() }) {
@@ -54,11 +49,6 @@ public struct InspectKitDashboardView: View {
                     .disabled(store.records.isEmpty)
                 }
             )
-            .sheet(isPresented: $showShare) {
-                if let url = exportedFileURL {
-                    ShareSheet(items: [url])
-                }
-            }
         }
         // .stack shorthand is iOS 15+; StackNavigationViewStyle() is iOS 13+
         .navigationViewStyle(StackNavigationViewStyle())
@@ -134,17 +124,6 @@ public struct InspectKitDashboardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
-    // MARK: - Export
-
-    private func exportSession() {
-        do {
-            let url = try InspectKit.shared.exportSessionFile()
-            exportedFileURL = url
-            showShare = true
-        } catch {
-            // silent-fail; export is best-effort
-        }
-    }
 }
 
 private struct MethodChip: View {

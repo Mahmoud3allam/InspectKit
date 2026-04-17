@@ -1,16 +1,17 @@
 import SwiftUI
 import UIKit
 
-/// Shared visual tokens for the inspector UI. Dark-first, but usable in light mode.
+/// Shared visual tokens for the inspector UI. Professional dark theme.
 enum NIColor {
-    static let bg = Color(UIColor.systemBackground)
-    static let surface = Color(UIColor.secondarySystemBackground)
-    static let surfaceElevated = Color(UIColor.tertiarySystemBackground)
-    static let divider = Color(UIColor.separator).opacity(0.4)
-    static let text = Color(UIColor.label)
-    static let textMuted = Color(UIColor.secondaryLabel)
-    static let textFaint = Color(UIColor.tertiaryLabel)
-    static let accent = Color(red: 0.36, green: 0.72, blue: 1.0)
+    static let bg = Color(red: 0.051, green: 0.051, blue: 0.078)
+    static let surface = Color(red: 0.075, green: 0.075, blue: 0.118)
+    static let surfaceElevated = Color(red: 0.095, green: 0.095, blue: 0.150)
+    static let divider = Color.white.opacity(0.08)
+    static let text = Color.white
+    static let textMuted = Color.white.opacity(0.55)
+    static let textFaint = Color.white.opacity(0.25)
+    static let accent = Color(red: 0.133, green: 0.400, blue: 1.000)
+    static let accentCyan = Color(red: 0.000, green: 0.800, blue: 1.000)
     static let success = Color(red: 0.22, green: 0.78, blue: 0.45)
     static let warning = Color(red: 0.98, green: 0.74, blue: 0.18)
     static let failure = Color(red: 0.98, green: 0.36, blue: 0.39)

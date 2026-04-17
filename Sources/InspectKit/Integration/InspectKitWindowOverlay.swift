@@ -23,6 +23,8 @@ public final class InspectKitWindowOverlay {
     private var overlayWindow: PassthroughWindow?
     private var hostingController: UIHostingController<AnyView>?
     private var customIcon: UIImage?
+    private var imageContentMode: ContentMode = .fit
+    private var bubbleColor: Color?
 
     private init() {}
 
@@ -31,15 +33,22 @@ public final class InspectKitWindowOverlay {
     /// Installs the floating bubble into a new window above `sibling`.
     /// Call this once from `AppDelegate.application(_:didFinishLaunchingWithOptions:)`.
     ///
-    /// - Parameter customIcon: Optional image rendered inside the bubble.
-    ///   Pass `nil` to use the default "network" SF Symbol.
+    /// - Parameters:
+    ///   - customIcon: Optional image rendered inside the bubble. `nil` = default "network" SF Symbol.
+    ///   - imageContentMode: How the custom icon is scaled in its frame. Default `.fit`.
+    ///   - bubbleColor: Background colour of the bubble. `nil` = default accent gradient.
     @MainActor
-    public func install(in sibling: UIWindow, customIcon: UIImage? = nil) {
+    public func install(in sibling: UIWindow,
+                        customIcon: UIImage? = nil,
+                        imageContentMode: ContentMode = .fit,
+                        bubbleColor: Color? = nil) {
         guard InspectKit.shared.configuration.isEnabled,
               InspectKit.shared.configuration.showsFloatingOverlay else { return }
         guard overlayWindow == nil else { return }
 
         self.customIcon = customIcon
+        self.imageContentMode = imageContentMode
+        self.bubbleColor = bubbleColor
 
         let window = PassthroughWindow(frame: sibling.bounds)
         window.windowLevel = .statusBar + 1
@@ -64,15 +73,22 @@ public final class InspectKitWindowOverlay {
     /// Installs the floating bubble into a dedicated window in `scene`.
     /// Call this from `SceneDelegate.scene(_:willConnectTo:options:)`.
     ///
-    /// - Parameter customIcon: Optional image rendered inside the bubble.
-    ///   Pass `nil` to use the default "network" SF Symbol.
+    /// - Parameters:
+    ///   - customIcon: Optional image rendered inside the bubble. `nil` = default "network" SF Symbol.
+    ///   - imageContentMode: How the custom icon is scaled in its frame. Default `.fit`.
+    ///   - bubbleColor: Background colour of the bubble. `nil` = default accent gradient.
     @MainActor
-    public func install(in scene: UIWindowScene, customIcon: UIImage? = nil) {
+    public func install(in scene: UIWindowScene,
+                        customIcon: UIImage? = nil,
+                        imageContentMode: ContentMode = .fit,
+                        bubbleColor: Color? = nil) {
         guard InspectKit.shared.configuration.isEnabled,
               InspectKit.shared.configuration.showsFloatingOverlay else { return }
         guard overlayWindow == nil else { return }
 
         self.customIcon = customIcon
+        self.imageContentMode = imageContentMode
+        self.bubbleColor = bubbleColor
 
         let window = PassthroughWindow(windowScene: scene)
         window.windowLevel = .statusBar + 1
@@ -99,12 +115,16 @@ public final class InspectKitWindowOverlay {
         overlayWindow = nil
         hostingController = nil
         customIcon = nil
+        imageContentMode = .fit
+        bubbleColor = nil
     }
 
     // MARK: - Private
 
     private var overlayContent: some View {
-        InspectKitOverlay(customIcon: customIcon)
+        InspectKitOverlay(customIcon: customIcon,
+                          imageContentMode: imageContentMode,
+                          bubbleColor: bubbleColor)
     }
 }
 
