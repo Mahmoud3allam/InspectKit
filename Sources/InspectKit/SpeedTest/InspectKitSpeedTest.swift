@@ -1,4 +1,23 @@
 import Foundation
+import Network
+
+#if canImport(UIKit)
+import UIKit
+#endif
+
+// MARK: - History record
+
+public struct SpeedTestRecord: Codable, Identifiable, Sendable {
+    public let id: UUID
+    public let date: Date
+    public let downloadMbps: Double
+    public let uploadMbps: Double
+    public let pingMS: Double
+    public let jitterMS: Double
+    public let lossPercent: Double
+    public let deviceName: String
+    public let connectionType: String
+}
 
 // MARK: - Phase
 
@@ -10,40 +29,52 @@ public enum SpeedTestPhase: Equatable {
     case done
     case failed(String)
 
-    var label: String {
+    public var isRunning: Bool {
+        switch self { case .ping, .download, .upload: return true; default: return false }
+    }
+
+    public var label: String {
         switch self {
-        case .idle:            return "Tap Start to begin"
-        case .ping:            return "Measuring latency…"
-        case .download:        return "Testing download speed…"
-        case .upload:          return "Testing upload speed…"
+        case .idle:            return "Tap to begin"
+        case .ping:            return "Testing latency…"
+        case .download:        return "Testing download…"
+        case .upload:          return "Testing upload…"
         case .done:            return "Test complete"
         case .failed(let msg): return msg
         }
-    }
-
-    var isRunning: Bool {
-        switch self { case .ping, .download, .upload: return true; default: return false }
     }
 }
 
 // MARK: - Engine
 
-/// Measures ping, download, and upload speed against Cloudflare's public test endpoints.
-/// All requests bypass InspectKit's interception so they don't pollute the request list
-/// and so the measured throughput reflects real network speed.
 @MainActor
 public final class InspectKitSpeedTester: ObservableObject {
 
+    // Live gauge
     @Published public var phase: SpeedTestPhase = .idle
+    @Published public var currentSpeed: Double   = 0
+
+    // Final results
     @Published public var pingMS: Double?        = nil
+    @Published public var jitterMS: Double?      = nil
+    @Published public var lossPercent: Double?   = nil
     @Published public var downloadMbps: Double?  = nil
     @Published public var uploadMbps: Double?    = nil
-    @Published public var downloadProgress: Double = 0
-    @Published public var uploadProgress: Double   = 0
+
+    // Chart
+    @Published public var realtimeSamples: [Double] = []
+
+    // History
+    @Published public var history: [SpeedTestRecord] = []
+
+    private static let historyKey = "InspectKit.speedHistory"
+    private static let maxHistory = 10
 
     private var activeTask: Task<Void, Never>?
 
-    public init() {}
+    public init() {
+        history = Self.loadHistory()
+    }
 
     // MARK: - Public API
 
@@ -56,86 +87,147 @@ public final class InspectKitSpeedTester: ObservableObject {
         activeTask?.cancel()
         activeTask = nil
         phase = .idle
-        downloadProgress = 0
-        uploadProgress   = 0
+        currentSpeed = 0
+        realtimeSamples = []
+    }
+
+    public func clearHistory() {
+        history = []
+        UserDefaults.standard.removeObject(forKey: Self.historyKey)
     }
 
     // MARK: - Test runner
 
     private func run() async {
-        pingMS = nil; downloadMbps = nil; uploadMbps = nil
-        downloadProgress = 0; uploadProgress = 0
+        pingMS = nil; jitterMS = nil; lossPercent = nil
+        downloadMbps = nil; uploadMbps = nil
+        currentSpeed = 0; realtimeSamples = []
+
+        let connectionType = await Self.detectConnectionType()
 
         do {
-            // ── Ping ──────────────────────────────────────────────────
+            // ── Ping / Jitter / Loss ─────────────────────────────────
             phase = .ping
-            var total = 0.0
-            for _ in 0 ..< 3 {
-                try Task.checkCancellation()
-                let ms = try await Self.measurePing()
-                total += ms
-            }
-            pingMS = total / 3
-
-            // ── Download ──────────────────────────────────────────────
+            let (avg, jitter, loss) = try await Self.runPingBatch()
             try Task.checkCancellation()
+            pingMS       = avg
+            jitterMS     = jitter
+            lossPercent  = loss
+
+            // ── Download ─────────────────────────────────────────────
             phase = .download
-            downloadMbps = try await measureDownload()
-
-            // ── Upload ────────────────────────────────────────────────
+            let dl = try await measureDownload()
             try Task.checkCancellation()
+            downloadMbps = dl
+            currentSpeed = dl
+
+            // ── Upload ───────────────────────────────────────────────
             phase = .upload
-            uploadMbps = try await measureUpload()
+            let ul = try await measureUpload()
+            try Task.checkCancellation()
+            uploadMbps = ul
 
             phase = .done
 
+            // Save to history
+            let record = SpeedTestRecord(
+                id: UUID(),
+                date: Date(),
+                downloadMbps: dl,
+                uploadMbps: ul,
+                pingMS: avg,
+                jitterMS: jitter,
+                lossPercent: loss,
+                deviceName: Self.deviceName(),
+                connectionType: connectionType
+            )
+            history.insert(record, at: 0)
+            if history.count > Self.maxHistory { history = Array(history.prefix(Self.maxHistory)) }
+            Self.saveHistory(history)
+
         } catch is CancellationError {
             phase = .idle
+            currentSpeed = 0
         } catch {
             phase = .failed(error.localizedDescription)
+            currentSpeed = 0
         }
     }
 
-    // MARK: - Ping
+    // MARK: - Ping batch (5 requests → avg, jitter, loss)
+
+    private static func runPingBatch() async throws -> (avg: Double, jitter: Double, loss: Double) {
+        let total = 5
+        var times: [Double] = []
+        var failures = 0
+
+        for _ in 0 ..< total {
+            do {
+                times.append(try await measurePing())
+            } catch {
+                failures += 1
+            }
+        }
+
+        guard !times.isEmpty else { throw URLError(.notConnectedToInternet) }
+
+        let avg      = times.reduce(0, +) / Double(times.count)
+        let variance = times.map { pow($0 - avg, 2) }.reduce(0, +) / Double(times.count)
+        let jitter   = sqrt(variance)
+        let loss     = Double(failures) / Double(total) * 100
+
+        return (avg, jitter, loss)
+    }
 
     private static func measurePing() async throws -> Double {
         var req = URLRequest(url: URL(string: "https://speed.cloudflare.com/__down?bytes=1")!)
-        req.httpMethod = "HEAD"
-        req.timeoutInterval = 10
+        req.httpMethod       = "HEAD"
+        req.timeoutInterval  = 8
         req = InspectKitRequestMarker.mark(req)
 
         let start = Date()
-        _ = try await performRequest(req)
+        _ = try await Self.performRequest(req)
         return Date().timeIntervalSince(start) * 1000
     }
 
-    // MARK: - Download
+    // MARK: - Download (10 MB with real-time samples)
 
     private func measureDownload() async throws -> Double {
         var req = URLRequest(url: URL(string: "https://speed.cloudflare.com/__down?bytes=10000000")!)
         req.timeoutInterval = 60
         req = InspectKitRequestMarker.mark(req)
 
-        let expectedBytes = 10_000_000
+        let expected = 10_000_000
 
         return try await withCheckedThrowingContinuation { [weak self] continuation in
             let delegate = SpeedTestDelegate()
-            let config = URLSessionConfiguration.ephemeral
-            config.protocolClasses = []
-            config.urlCache = nil
-            config.httpCookieStorage = nil
-            let session = URLSession(configuration: config,
-                                     delegate: delegate,
-                                     delegateQueue: .main)
+            let session  = Self.makeSession(delegate: delegate)
 
-            var received = 0
-            let start = Date()
-            var resumed = false
+            var received     = 0
+            var lastBytes    = 0
+            var lastSample   = Date()
+            let start        = Date()
+            var resumed      = false
 
             delegate.onData = { data in
                 received += data.count
-                let progress = min(Double(received) / Double(expectedBytes), 1.0)
-                Task { @MainActor [weak self] in self?.downloadProgress = progress }
+
+                // Emit sample every 0.4 s
+                let now      = Date()
+                let elapsed  = now.timeIntervalSince(lastSample)
+                if elapsed >= 0.4 {
+                    let chunk   = received - lastBytes
+                    let mbps    = Double(chunk * 8) / elapsed / 1_000_000
+                    lastBytes   = received
+                    lastSample  = now
+                    Task { @MainActor [weak self] in
+                        self?.currentSpeed = mbps
+                        self?.realtimeSamples.append(mbps)
+                    }
+                }
+
+                let progress = min(Double(received) / Double(expected), 1.0)
+                _ = progress // progress is implicit via currentSpeed; no separate bar needed
             }
 
             delegate.onComplete = { error in
@@ -146,44 +238,38 @@ public final class InspectKitSpeedTester: ObservableObject {
                     continuation.resume(throwing: error)
                 } else {
                     let elapsed = max(Date().timeIntervalSince(start), 0.001)
-                    let mbps = Double(received * 8) / elapsed / 1_000_000
-                    continuation.resume(returning: mbps)
+                    continuation.resume(returning: Double(received * 8) / elapsed / 1_000_000)
                 }
             }
 
-            let task = session.dataTask(with: req)
-            task.resume()
+            session.dataTask(with: req).resume()
         }
     }
 
-    // MARK: - Upload
+    // MARK: - Upload (2 MB)
 
     private func measureUpload() async throws -> Double {
-        let payload = Data(repeating: 0x42, count: 2_000_000) // 2 MB
+        let payload = Data(repeating: 0x42, count: 2_000_000)
 
         var req = URLRequest(url: URL(string: "https://speed.cloudflare.com/__up")!)
-        req.httpMethod = "POST"
-        req.httpBody   = payload
+        req.httpMethod  = "POST"
+        req.httpBody    = payload
         req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 60
         req = InspectKitRequestMarker.mark(req)
 
         return try await withCheckedThrowingContinuation { [weak self] continuation in
             let delegate = SpeedTestDelegate()
-            let config = URLSessionConfiguration.ephemeral
-            config.protocolClasses = []
-            config.urlCache = nil
-            config.httpCookieStorage = nil
-            let session = URLSession(configuration: config,
-                                     delegate: delegate,
-                                     delegateQueue: .main)
+            let session  = Self.makeSession(delegate: delegate)
 
-            let start = Date()
+            let start   = Date()
             var resumed = false
 
-            delegate.onSent = { bytesSent, total in
-                let progress = total > 0 ? min(Double(bytesSent) / Double(total), 1.0) : 0
-                Task { @MainActor [weak self] in self?.uploadProgress = progress }
+            delegate.onSent = { sent, total in
+                let mbps = total > 0
+                    ? Double(sent * 8) / max(Date().timeIntervalSince(start), 0.001) / 1_000_000
+                    : 0
+                Task { @MainActor [weak self] in self?.currentSpeed = mbps }
             }
 
             delegate.onComplete = { error in
@@ -194,61 +280,92 @@ public final class InspectKitSpeedTester: ObservableObject {
                     continuation.resume(throwing: error)
                 } else {
                     let elapsed = max(Date().timeIntervalSince(start), 0.001)
-                    let mbps = Double(payload.count * 8) / elapsed / 1_000_000
-                    continuation.resume(returning: mbps)
+                    continuation.resume(returning: Double(payload.count * 8) / elapsed / 1_000_000)
                 }
             }
 
-            let task = session.dataTask(with: req)
-            task.resume()
+            session.dataTask(with: req).resume()
         }
     }
 
-    // MARK: - Generic request helper (ping)
+    // MARK: - Helpers
 
     private static func performRequest(_ request: URLRequest) async throws -> Data {
         try await withCheckedThrowingContinuation { continuation in
-            let config = URLSessionConfiguration.ephemeral
-            config.protocolClasses = []
-            config.urlCache = nil
-            config.httpCookieStorage = nil
-            let session = URLSession(configuration: config)
-            let task = session.dataTask(with: request) { data, _, error in
+            let session = makeSession(delegate: nil)
+            session.dataTask(with: request) { data, _, error in
                 session.invalidateAndCancel()
                 if let error { continuation.resume(throwing: error) }
                 else { continuation.resume(returning: data ?? Data()) }
-            }
-            task.resume()
+            }.resume()
         }
+    }
+
+    private static func makeSession(delegate: (URLSessionDataDelegate & URLSessionTaskDelegate)?) -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses   = []
+        config.urlCache          = nil
+        config.httpCookieStorage = nil
+        return URLSession(configuration: config, delegate: delegate, delegateQueue: .main)
+    }
+
+    private static func detectConnectionType() async -> String {
+        await withCheckedContinuation { continuation in
+            let monitor = NWPathMonitor()
+            var done = false
+            monitor.pathUpdateHandler = { path in
+                guard !done else { return }
+                done = true
+                monitor.cancel()
+                if path.usesInterfaceType(.wifi)     { continuation.resume(returning: "WiFi") }
+                else if path.usesInterfaceType(.cellular) { continuation.resume(returning: "Cellular") }
+                else { continuation.resume(returning: "Unknown") }
+            }
+            monitor.start(queue: DispatchQueue.global())
+        }
+    }
+
+    private static func deviceName() -> String {
+        #if canImport(UIKit)
+        return UIDevice.current.name
+        #else
+        return "Unknown Device"
+        #endif
+    }
+
+    // MARK: - History persistence
+
+    private static func loadHistory() -> [SpeedTestRecord] {
+        guard let data = UserDefaults.standard.data(forKey: historyKey),
+              let records = try? JSONDecoder().decode([SpeedTestRecord].self, from: data)
+        else { return [] }
+        return records
+    }
+
+    private static func saveHistory(_ records: [SpeedTestRecord]) {
+        guard let data = try? JSONEncoder().encode(records) else { return }
+        UserDefaults.standard.set(data, forKey: historyKey)
     }
 }
 
-// MARK: - SpeedTestDelegate
+// MARK: - URLSession delegate bridge
 
-/// Non-actor URLSession delegate that bridges callbacks into the tester via closures.
 private final class SpeedTestDelegate: NSObject, URLSessionDataDelegate, URLSessionTaskDelegate {
-
     var onData:     ((Data) -> Void)?
-    var onSent:     ((_ bytesSent: Int64, _ totalExpected: Int64) -> Void)?
+    var onSent:     ((_ sent: Int64, _ total: Int64) -> Void)?
     var onComplete: ((Error?) -> Void)?
 
-    func urlSession(_ session: URLSession,
-                    dataTask: URLSessionDataTask,
-                    didReceive data: Data) {
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         onData?(data)
     }
 
-    func urlSession(_ session: URLSession,
-                    task: URLSessionTask,
-                    didSendBodyData bytesSent: Int64,
-                    totalBytesSent: Int64,
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    didSendBodyData: Int64, totalBytesSent: Int64,
                     totalBytesExpectedToSend: Int64) {
         onSent?(totalBytesSent, totalBytesExpectedToSend)
     }
 
-    func urlSession(_ session: URLSession,
-                    task: URLSessionTask,
-                    didCompleteWithError error: Error?) {
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         onComplete?(error)
     }
 }
