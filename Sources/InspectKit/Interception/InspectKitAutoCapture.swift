@@ -31,7 +31,6 @@ enum InspectKitAutoCapture {
         // The replacement implementation lives on URLSessionConfiguration (abstract base)
         // so that Swift can find it via class_getInstanceMethod.
         guard let newMethod = class_getInstanceMethod(URLSessionConfiguration.self, swizzSel) else {
-            print("[InspectKit] ⚠️ ik_protocolClasses method not found — interception unavailable")
             return
         }
 
@@ -47,13 +46,9 @@ enum InspectKitAutoCapture {
         guard
             let origMethod  = class_getInstanceMethod(configClass, origSel),
             let addedMethod = class_getInstanceMethod(configClass, swizzSel)
-        else {
-            print("[InspectKit] ⚠️ Could not resolve methods for protocolClasses swizzle")
-            return
-        }
+        else { return }
 
         method_exchangeImplementations(origMethod, addedMethod)
-        print("[InspectKit] ✓ protocolClasses swizzle active — all URLSessions will be intercepted")
     }
 }
 

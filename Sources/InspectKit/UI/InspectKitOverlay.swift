@@ -55,18 +55,33 @@ public struct InspectKitOverlay: View {
                             // Tap: total travel < 10 pt (dx²+dy² < 100)
                             if dx * dx + dy * dy < 100 {
                                 showDashboard = true
+                                InspectKitBubbleTracker.shared.isDashboardOpen = true
                             } else {
                                 // Drag: commit final position, spring-snap into bounds
+                                let newX = clampedX(position.x + dx, in: geo.size)
+                                let newY = clampedY(position.y + dy, in: geo.size)
                                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                    position.x = clampedX(position.x + dx, in: geo.size)
-                                    position.y = clampedY(position.y + dy, in: geo.size)
+                                    position.x = newX
+                                    position.y = newY
                                 }
+                                // Keep tracker in sync so PassthroughWindow knows the new location
+                                InspectKitBubbleTracker.shared.center = CGPoint(x: newX, y: newY)
                             }
                         }
                 )
+                .onAppear {
+                    // Seed the tracker with the initial position
+                    InspectKitBubbleTracker.shared.center = CGPoint(
+                        x: clampedX(position.x, in: geo.size),
+                        y: clampedY(position.y, in: geo.size)
+                    )
+                }
         }
         .edgesIgnoringSafeArea(.all)
-        .sheet(isPresented: $showDashboard) {
+        .sheet(isPresented: $showDashboard, onDismiss: {
+            // Covers both the explicit dismiss button and swipe-to-dismiss.
+            InspectKitBubbleTracker.shared.isDashboardOpen = false
+        }) {
             InspectKitDashboardView(store: store, onDismiss: { showDashboard = false })
         }
     }

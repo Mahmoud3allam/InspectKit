@@ -53,7 +53,16 @@ final class InspectKitSessionDelegateProxy: NSObject, URLSessionDataDelegate {
                     willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest,
                     completionHandler: @escaping (URLRequest?) -> Void) {
-        // Allow redirects; record still reflects the original URL.
+        // Only follow redirects that stay on http/https.
+        // If the Location header points to a custom scheme (e.g. myapp://, file://)
+        // our forwarding session can't handle it and raises NSURLErrorUnsupportedURL.
+        // Passing nil cancels the redirect and returns the 302 response to the caller,
+        // which matches what URLSession does for non-HTTP redirect targets natively.
+        let scheme = request.url?.scheme?.lowercased() ?? ""
+        guard scheme == "http" || scheme == "https" else {
+            completionHandler(nil)
+            return
+        }
         completionHandler(request)
     }
 
@@ -61,5 +70,37 @@ final class InspectKitSessionDelegateProxy: NSObject, URLSessionDataDelegate {
                     task: URLSessionTask,
                     didFinishCollecting metrics: URLSessionTaskMetrics) {
         metricsHandler?(task, metrics)
+    }
+
+    // MARK: - Authentication challenges
+
+    /// Session-level challenge (e.g. SSL client certificates for the whole session).
+    func urlSession(_ session: URLSession,
+                    didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        completionHandler(.performDefaultHandling, nil)
+    }
+
+    /// Task-level challenge (e.g. server-trust evaluation, HTTP Basic/Digest auth).
+    /// Using .performDefaultHandling means the system trust chain is used, which is
+    /// equivalent to what URLSession does when no delegate is present — but being
+    /// explicit here prevents URLSession from silently cancelling challenges for
+    /// dev/staging servers that have custom CAs.
+    func urlSession(_ session: URLSession,
+                    task: URLSessionTask,
+                    didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        completionHandler(.performDefaultHandling, nil)
+    }
+
+    // MARK: - Cache
+
+    /// Pass the proposed cached response through unchanged so the URL loading
+    /// system's normal cache decision is honoured.
+    func urlSession(_ session: URLSession,
+                    dataTask: URLSessionDataTask,
+                    willCache proposedResponse: CachedURLResponse,
+                    completionHandler: @escaping (CachedURLResponse?) -> Void) {
+        completionHandler(proposedResponse)
     }
 }

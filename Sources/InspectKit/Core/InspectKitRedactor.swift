@@ -11,6 +11,15 @@ public struct InspectKitRedactor: Sendable {
         self.placeholder = config.redactionPlaceholder
     }
 
+    public init(redactedHeaderKeys: Set<String>, redactedBodyKeys: Set<String>, placeholder: String) {
+        self.redactedHeaderKeys = Set(redactedHeaderKeys.map { $0.lowercased() })
+        self.redactedBodyKeys = Set(redactedBodyKeys.map { $0.lowercased() })
+        self.placeholder = placeholder
+    }
+
+    /// A no-op redactor that leaves all values untouched.
+    public static let identity = InspectKitRedactor(redactedHeaderKeys: [], redactedBodyKeys: [], placeholder: "")
+
     public func redactHeaders(_ headers: [String: String]) -> [String: String] {
         var out: [String: String] = [:]
         for (k, v) in headers {

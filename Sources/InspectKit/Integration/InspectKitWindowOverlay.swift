@@ -110,13 +110,48 @@ public final class InspectKitWindowOverlay {
 
 // MARK: - PassthroughWindow
 
-/// A UIWindow that only consumes touches that land on a real view.
-/// Touches on transparent areas fall through to the window below.
+/// A UIWindow that only consumes touches that land inside the bubble.
+///
+/// We cannot rely on `super.hitTest` to distinguish bubble vs transparent areas because
+/// `UIHostingController` renders SwiftUI content into a single `_UIHostingView` — there
+/// may be no separate UIKit subviews for individual SwiftUI elements. In that case
+/// `super.hitTest` always returns the root hosting view, and the old "== rootVC.view"
+/// check would pass EVERY touch through, including taps on the bubble itself.
+///
+/// Instead we do explicit geometry: only claim touches within the bubble's tracked rect.
 final class PassthroughWindow: UIWindow {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard let hit = super.hitTest(point, with: event) else { return nil }
-        // If the hit view is the root hosting controller's view (clear background),
-        // pass the touch through so the underlying window handles it.
-        return hit == rootViewController?.view ? nil : hit
+        guard InspectKitBubbleTracker.shared.contains(point) else { return nil }
+        // Touch is in the bubble — let UIKit (and SwiftUI) handle it normally.
+        return super.hitTest(point, with: event) ?? rootViewController?.view
+    }
+}
+
+// MARK: - InspectKitBubbleTracker
+
+/// Lightweight singleton that tracks the bubble's current screen centre so that
+/// `PassthroughWindow` can do a geometry-based hit test instead of relying on the
+/// UIKit view hierarchy produced by UIHostingController.
+final class InspectKitBubbleTracker {
+    static let shared = InspectKitBubbleTracker()
+    private init() {}
+
+    /// Centre of the bubble in window/screen coordinates. Updated by InspectKitOverlay.
+    var center: CGPoint = CGPoint(x: 160, y: 320)
+
+    /// When the dashboard sheet is open the overlay window owns the full screen,
+    /// so all touches must be captured — not just the bubble area.
+    var isDashboardOpen: Bool = false
+
+    /// Capture radius — half the bubble width (26) plus 8 pt generous padding.
+    private let hitRadius: CGFloat = 34
+
+    /// Returns true if `point` falls within the bubble's hit area,
+    /// or always true while the dashboard sheet is presented.
+    func contains(_ point: CGPoint) -> Bool {
+        if isDashboardOpen { return true }
+        let dx = point.x - center.x
+        let dy = point.y - center.y
+        return dx * dx + dy * dy <= hitRadius * hitRadius
     }
 }

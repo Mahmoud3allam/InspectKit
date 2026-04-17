@@ -1,8 +1,23 @@
+# macOS
 .DS_Store
+**/.DS_Store
+
+# Swift build artifacts
 /.build
 /Packages
+DerivedData
 *.xcodeproj
 .swiftpm
-DerivedData
+
+# Environment / secrets
 .env
 .env.local
+
+# Claude Code (AI assistant config — not relevant to library consumers)
+.claude/
+
+# Internal development docs — not needed by library consumers
+CLAUDE_PROMPT.md
+NETWORK_INSPECTOR_SPEC.md
+PUBLISHING.md
+UX.md

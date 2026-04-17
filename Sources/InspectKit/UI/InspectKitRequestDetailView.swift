@@ -5,6 +5,11 @@ struct NetworkRequestDetailView: View {
     let recordID: UUID
 
     @State private var selectedTab: Tab = .overview
+    @State private var showSensitive: Bool = false
+
+    private var activeRedactor: InspectKitRedactor {
+        showSensitive ? .identity : InspectKit.shared.redactor
+    }
 
     enum Tab: String, CaseIterable, Identifiable {
         case overview = "Overview"
@@ -23,7 +28,7 @@ struct NetworkRequestDetailView: View {
     var body: some View {
         VStack(spacing: 0) {
             if let record = record {
-                DetailHeader(record: record)
+                DetailHeader(record: record, showSensitive: $showSensitive)
                     .padding(.horizontal, 16)
                     .padding(.top, 10)
                     .padding(.bottom, 8)
@@ -50,9 +55,9 @@ struct NetworkRequestDetailView: View {
     private func content(for r: NetworkRequestRecord) -> some View {
         switch selectedTab {
         case .overview: OverviewTab(record: r)
-        case .request: RequestTab(record: r)
-        case .response: ResponseTab(record: r)
-        case .headers: HeadersTab(record: r)
+        case .request: RequestTab(record: r, redactor: activeRedactor)
+        case .response: ResponseTab(record: r, redactor: activeRedactor)
+        case .headers: HeadersTab(record: r, redactor: activeRedactor)
         case .metrics: TimelineView(record: r)
         case .curl: CurlPreviewView(record: r,
                                     exporter: InspectKit.shared.exporter,
@@ -65,6 +70,7 @@ struct NetworkRequestDetailView: View {
 
 private struct DetailHeader: View {
     let record: NetworkRequestRecord
+    @Binding var showSensitive: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -80,6 +86,14 @@ private struct DetailHeader: View {
                         .font(NIFont.monoSemibold)
                         .foregroundColor(NIColor.text)
                 }
+                Button {
+                    showSensitive.toggle()
+                } label: {
+                    Image(systemName: showSensitive ? "eye.slash" : "eye")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(showSensitive ? NIColor.accent : NIColor.textMuted)
+                }
+                .buttonStyle(PlainButtonStyle())
             }
             Text(record.urlString)
                 .font(NIFont.mono)
@@ -154,9 +168,9 @@ private struct OverviewTab: View {
 
 private struct RequestTab: View {
     let record: NetworkRequestRecord
+    let redactor: InspectKitRedactor
 
     var body: some View {
-        let redactor = InspectKit.shared.redactor
         VStack(alignment: .leading, spacing: 16) {
             HeadersView(title: "Request Headers", headers: record.requestHeaders, redactor: redactor)
             sectionTitle("Body")
@@ -167,9 +181,9 @@ private struct RequestTab: View {
 
 private struct ResponseTab: View {
     let record: NetworkRequestRecord
+    let redactor: InspectKitRedactor
 
     var body: some View {
-        let redactor = InspectKit.shared.redactor
         VStack(alignment: .leading, spacing: 16) {
             HeadersView(title: "Response Headers", headers: record.responseHeaders, redactor: redactor)
             sectionTitle("Body")
@@ -180,9 +194,9 @@ private struct ResponseTab: View {
 
 private struct HeadersTab: View {
     let record: NetworkRequestRecord
+    let redactor: InspectKitRedactor
 
     var body: some View {
-        let redactor = InspectKit.shared.redactor
         VStack(alignment: .leading, spacing: 16) {
             HeadersView(title: "Request Headers", headers: record.requestHeaders, redactor: redactor)
             HeadersView(title: "Response Headers", headers: record.responseHeaders, redactor: redactor)

@@ -38,39 +38,20 @@ public final class InspectKitURLProtocol: URLProtocol {
 
     private static let forwardingSession: URLSession = {
         let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [] // critical: avoid re-entry into our protocol
+        config.protocolClasses = []          // prevent re-entry into our own protocol
+        config.httpCookieStorage = .shared   // share the app's cookie jar so session cookies are sent
+        config.httpShouldSetCookies = true
+        config.urlCache = .shared            // honour per-request cachePolicy
         return URLSession(configuration: config, delegate: delegateProxy, delegateQueue: nil)
     }()
 
     // MARK: - URLProtocol plumbing
 
     public override class func canInit(with request: URLRequest) -> Bool {
-        let url = request.url?.absoluteString ?? "unknown"
-        print("🔵 [InspectKit] canInit called for: \(url)")
-
-        guard isActive else {
-            print("   ❌ Not active (isActive=\(isActive))")
-            return false
-        }
-        print("   ✓ isActive=true")
-
-        if InspectKitRequestMarker.isHandled(request) {
-            print("   ❌ Already handled")
-            return false
-        }
-        print("   ✓ Not already handled")
-
-        guard let scheme = request.url?.scheme?.lowercased() else {
-            print("   ❌ No scheme")
-            return false
-        }
-        print("   ✓ Scheme: \(scheme)")
-
-        guard scheme == "http" || scheme == "https" else {
-            print("   ❌ Not http/https")
-            return false
-        }
-        print("   ✅ WILL INTERCEPT")
+        guard isActive else { return false }
+        guard !InspectKitRequestMarker.isHandled(request) else { return false }
+        guard let scheme = request.url?.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else { return false }
         return true
     }
 
@@ -86,26 +67,26 @@ public final class InspectKitURLProtocol: URLProtocol {
 
     private var dataTask: URLSessionDataTask?
     private var accumulatedData = Data()
+    private var accumulationCapped = false
     private var receivedResponse: URLResponse?
     private var recordID: UUID?
+
+    /// Hard cap on how many bytes are buffered internally for the InspectKit UI.
+    /// All response bytes are still forwarded to the original client regardless of this cap.
+    private static let captureBodyCap = 10 * 1024 * 1024  // 10 MB
 
     // MARK: - Lifecycle
 
     public override func startLoading() {
-        let url = self.request.url?.absoluteString ?? "unknown"
-        print("🟢 [InspectKit] startLoading called for: \(url)")
-
         let original = self.request
         let recordID = beginInspection(for: original)
         self.recordID = recordID
-        print("   ✓ Created record ID: \(recordID?.uuidString ?? "nil")")
 
         let forwarded = InspectKitRequestMarker.mark(original, recordID: recordID)
         let task = Self.forwardingSession.dataTask(with: forwarded)
         Self.delegateProxy.register(self, for: task)
         self.dataTask = task
         task.resume()
-        print("   ✅ Task resumed")
     }
 
     public override func stopLoading() {
@@ -116,11 +97,18 @@ public final class InspectKitURLProtocol: URLProtocol {
 
     func forwardResponse(_ response: URLResponse) {
         receivedResponse = response
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        // .allowed lets the URL loading system honour Cache-Control / ETag headers normally.
+        // The previous .notAllowed was silently preventing all HTTP caching for intercepted requests.
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .allowed)
     }
 
     func forwardData(_ data: Data) {
-        accumulatedData.append(data)
+        // Buffer up to captureBodyCap for the InspectKit UI; forward ALL bytes to the client.
+        if !accumulationCapped {
+            let space = Self.captureBodyCap - accumulatedData.count
+            if space > 0 { accumulatedData.append(data.prefix(space)) }
+            if accumulatedData.count >= Self.captureBodyCap { accumulationCapped = true }
+        }
         client?.urlProtocol(self, didLoad: data)
     }
 
@@ -174,19 +162,32 @@ public final class InspectKitURLProtocol: URLProtocol {
         let ct = (request.allHTTPHeaderFields?.firstValueCaseInsensitive(for: "Content-Type") ?? "")
         let kind = BodyDetection.kind(for: ct)
 
+        // httpBodyStream is a one-shot InputStream shared with the forwarding session's
+        // data task.  Reading it here can consume it before URLSession sends the body,
+        // resulting in the request going out with an empty body and the server returning
+        // an error.  We only capture in-memory body (httpBody); for stream-based requests
+        // we fall back to the Content-Length header for the byte count.
+        let streamByteCount = Int(request.allHTTPHeaderFields?
+                                    .firstValueCaseInsensitive(for: "Content-Length") ?? "") ?? 0
+
         guard config.captureRequestBodies else {
-            let len = request.httpBody?.count ?? 0
+            let len = request.httpBody?.count ?? streamByteCount
             return CapturedBody(kind: kind, contentType: ct.isEmpty ? nil : ct, byteCount: len,
                                 data: nil, textPreview: nil, isTruncated: len > 0)
         }
 
-        var bytes = request.httpBody ?? Data()
-        if bytes.isEmpty, let stream = request.httpBodyStream {
-            bytes = readStream(stream)
-        }
+        let bytes = request.httpBody ?? Data()
+
+        // No in-memory body — stream-based request (multipart, etc.).  Record the
+        // byte count but don't touch the stream.
         if bytes.isEmpty {
-            return CapturedBody(kind: .none, contentType: ct.isEmpty ? nil : ct, byteCount: 0)
+            return CapturedBody(kind: kind,
+                                contentType: ct.isEmpty ? nil : ct,
+                                byteCount: streamByteCount,
+                                data: nil, textPreview: nil,
+                                isTruncated: streamByteCount > 0)
         }
+
         let cap = config.maxCapturedBodyBytes
         var stored = bytes
         var truncated = false
@@ -206,18 +207,5 @@ public final class InspectKitURLProtocol: URLProtocol {
                             isTruncated: truncated)
     }
 
-    private static func readStream(_ stream: InputStream) -> Data {
-        var data = Data()
-        stream.open()
-        defer { stream.close() }
-        let size = 4096
-        var buf = [UInt8](repeating: 0, count: size)
-        while stream.hasBytesAvailable {
-            let read = stream.read(&buf, maxLength: size)
-            if read <= 0 { break }
-            data.append(buf, count: read)
-            if data.count > 10_000_000 { break }
-        }
-        return data
-    }
+
 }

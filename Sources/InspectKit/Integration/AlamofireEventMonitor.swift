@@ -12,29 +12,16 @@ import Alamofire
 /// let session = Session(eventMonitors: [InspectKitAlamofireMonitor()])
 /// ```
 public class InspectKitAlamofireMonitor: EventMonitor {
-    public init() {
-        print("🔧 [InspectKit] AlamofireEventMonitor initialized")
-    }
+    public init() {}
 
     public func request(_ request: Request, didCreateURLRequest urlRequest: URLRequest) {
-        let url = urlRequest.url?.absoluteString ?? "unknown"
-        print("📝 [InspectKit] EventMonitor: didCreateURLRequest \(url)")
-
-        guard InspectKitURLProtocol.isActive else {
-            print("   ❌ InspectKit not active")
-            return
-        }
-        guard InspectKit.shared.configuration.shouldCapture(host: urlRequest.url?.host) else {
-            print("   ❌ shouldCapture=false")
-            return
-        }
+        guard InspectKitURLProtocol.isActive else { return }
+        guard InspectKit.shared.configuration.shouldCapture(host: urlRequest.url?.host) else { return }
 
         let id = UUID()
         let seq = InspectKit.shared.store.nextSequence()
         let headers = urlRequest.allHTTPHeaderFields ?? [:]
         let body = captureRequestBody(from: urlRequest)
-
-        print("   ✓ Creating record: \(id.uuidString)")
 
         let record = NetworkRequestRecord(
             id: id,
@@ -46,7 +33,6 @@ public class InspectKitAlamofireMonitor: EventMonitor {
             environment: InspectKit.shared.configuration.environmentName
         )
 
-        // Store the request ID on the request for later lookup
         objc_setAssociatedObject(
             request,
             &InspectKitAlamofireMonitor.requestIDKey,
@@ -55,44 +41,28 @@ public class InspectKitAlamofireMonitor: EventMonitor {
         )
 
         Task { @MainActor in
-            print("   ✓ Inserting record into store")
             InspectKit.shared.store.insert(record)
-            print("   ✅ Record inserted: \(InspectKit.shared.store.records.count) total")
         }
     }
 
     public func request(_ request: Request,
                        didReceive response: HTTPURLResponse,
                        withData data: Data) {
-        print("📨 [InspectKit] EventMonitor: didReceive \(response.statusCode)")
-
-        guard let id = requestID(for: request) else {
-            print("   ❌ No ID found")
-            return
-        }
-
-        print("   ✓ Found record ID: \(id.uuidString)")
+        guard let id = requestID(for: request) else { return }
 
         Task { @MainActor in
-            print("   ✓ Finishing record")
             InspectKit.shared.finishRecord(
                 id: id,
                 response: response,
                 responseData: data,
                 error: nil
             )
-            print("   ✅ Record finished")
         }
     }
 
     public func request(_ request: Request,
                        didFailWithError error: AFError) {
-        print("❌ [InspectKit] EventMonitor: didFailWithError \(error)")
-
-        guard let id = requestID(for: request) else {
-            print("   ❌ No ID found")
-            return
-        }
+        guard let id = requestID(for: request) else { return }
 
         Task { @MainActor in
             InspectKit.shared.finishRecord(
@@ -109,9 +79,7 @@ public class InspectKitAlamofireMonitor: EventMonitor {
     private static var requestIDKey: UInt8 = 0
 
     private func requestID(for request: Request) -> UUID? {
-        let id = objc_getAssociatedObject(request, &Self.requestIDKey) as? UUID
-        print("   [lookup] ID: \(id?.uuidString ?? "nil")")
-        return id
+        objc_getAssociatedObject(request, &Self.requestIDKey) as? UUID
     }
 
     private func captureRequestBody(from request: URLRequest) -> CapturedBody {
