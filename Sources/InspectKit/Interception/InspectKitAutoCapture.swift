@@ -1,11 +1,15 @@
 import Foundation
 import ObjectiveC
 
+/// Swizzles `URLSessionConfiguration.protocolClasses` at the concrete backing-class level
+/// (`__NSCFURLSessionConfiguration`) so that `InspectKitURLProtocol` is appended to every
+/// session's protocol list — even sessions created before `InspectKit.start()` is called,
+/// and even when the caller has set an explicit `protocolClasses` array.
+///
+/// This is the same technique used by Wormholy and Netfox.
 enum InspectKitAutoCapture {
     private static var isInstalled = false
 
-    /// Installs swizzle to inject InspectKit into URLSessionConfiguration.protocolClasses getter
-    /// This catches ALL configurations, regardless of how they're created.
     static func install() {
         guard !isInstalled else { return }
         swizzleProtocolClassesGetter()
@@ -13,83 +17,69 @@ enum InspectKitAutoCapture {
     }
 
     private static func swizzleProtocolClassesGetter() {
-        print("[InspectKit] 🔧 Starting swizzle of protocolClasses...")
-
-        // Find the real backing class (varies by iOS version)
-        let configClass: AnyClass? =
+        // __NSCFURLSessionConfiguration is the private concrete class backing all
+        // URLSessionConfiguration instances.  Fall back to the abstract base if the
+        // private name changes in a future OS release.
+        let configClass: AnyClass =
             NSClassFromString("__NSCFURLSessionConfiguration")
             ?? NSClassFromString("NSURLSessionConfiguration")
             ?? URLSessionConfiguration.self
 
-        guard let cls = configClass else {
-            print("[InspectKit] ❌ Warning: Could not find URLSessionConfiguration backing class")
+        let origSel   = NSSelectorFromString("protocolClasses")
+        let swizzSel  = NSSelectorFromString("ik_protocolClasses")
+
+        // The replacement implementation lives on URLSessionConfiguration (abstract base)
+        // so that Swift can find it via class_getInstanceMethod.
+        guard let newMethod = class_getInstanceMethod(URLSessionConfiguration.self, swizzSel) else {
+            print("[InspectKit] ⚠️ ik_protocolClasses method not found — interception unavailable")
             return
         }
-        print("[InspectKit] ✓ Found backing class: \(cls)")
 
-        let origSel = NSSelectorFromString("protocolClasses")
-        let newSel = NSSelectorFromString("ik_protocolClasses")
+        // Copy the replacement onto the concrete class (it lives on the abstract base,
+        // and the concrete class is a different class object).
+        class_addMethod(
+            configClass,
+            swizzSel,
+            method_getImplementation(newMethod),
+            method_getTypeEncoding(newMethod)
+        )
 
-        // Add our replacement method to the real class
-        guard let newMethod = class_getInstanceMethod(URLSessionConfiguration.self, newSel) else {
-            print("[InspectKit] ❌ Warning: Could not find ik_protocolClasses method on URLSessionConfiguration")
-            return
-        }
-        print("[InspectKit] ✓ Found ik_protocolClasses method")
-
-        class_addMethod(cls, newSel,
-                        method_getImplementation(newMethod),
-                        method_getTypeEncoding(newMethod))
-        print("[InspectKit] ✓ Added ik_protocolClasses to backing class")
-
-        // Exchange implementations (safer than method_setImplementation)
         guard
-            let origMethod = class_getInstanceMethod(cls, origSel),
-            let addedMethod = class_getInstanceMethod(cls, newSel)
+            let origMethod  = class_getInstanceMethod(configClass, origSel),
+            let addedMethod = class_getInstanceMethod(configClass, swizzSel)
         else {
-            print("[InspectKit] ❌ Warning: Could not get methods for exchange")
+            print("[InspectKit] ⚠️ Could not resolve methods for protocolClasses swizzle")
             return
         }
 
         method_exchangeImplementations(origMethod, addedMethod)
-        print("[InspectKit] ✅ Swizzled URLSessionConfiguration.protocolClasses")
+        print("[InspectKit] ✓ protocolClasses swizzle active — all URLSessions will be intercepted")
     }
 }
 
-// MARK: - Swizzled replacement for protocolClasses getter
+// MARK: - Replacement getter
 
 extension URLSessionConfiguration {
-    /// This replaces the original protocolClasses getter.
-    /// After method_exchangeImplementations, calling ik_protocolClasses
-    /// invokes the ORIGINAL getter (implementations are swapped).
-    @objc dynamic var ik_protocolClasses: [AnyClass]? {
-        get {
-            print("🔵 [InspectKit] ik_protocolClasses getter called!")
-            // Call original getter (implementations are swapped, so this is the original)
-            let original = self.ik_protocolClasses
-            print("   Original: \(original ?? [])")
-            print("   isActive: \(InspectKitURLProtocol.isActive)")
-            guard InspectKitURLProtocol.isActive else {
-                print("   → Returning original (not active)")
-                return original
-            }
-            guard let classes = original else {
-                print("   → Returning InspectKit only (no original)")
-                return [InspectKitURLProtocol.self]
-            }
-            guard !classes.contains(where: { $0 == InspectKitURLProtocol.self }) else {
-                print("   → Already has InspectKit")
-                return classes
-            }
-            let result = classes + [InspectKitURLProtocol.self]
-            print("   → Injected InspectKit! Result: \(result)")
-            // Append InspectKit LAST so existing URLProtocols run first
-            return result
+    /// Swizzled replacement for the `protocolClasses` getter.
+    ///
+    /// After `method_exchangeImplementations`, calling `self.ik_protocolClasses()` invokes
+    /// the **original** getter (implementations are swapped), then we prepend
+    /// `InspectKitURLProtocol` at index 0 so it runs before the system `_NSURLHTTPProtocol`
+    /// which would otherwise claim all http/https and bypass `canInit` entirely.
+    @objc func ik_protocolClasses() -> [AnyClass]? {
+        // self.ik_protocolClasses() calls the original getter (swapped)
+        let original: [AnyClass] = self.ik_protocolClasses() ?? []
+
+        guard InspectKitURLProtocol.isActive else { return original }
+
+        // Avoid duplicates (e.g. when called on the internal forwarding session)
+        if original.contains(where: { $0 == InspectKitURLProtocol.self }) {
+            return original
         }
-        set {
-            print("🔵 [InspectKit] ik_protocolClasses setter called with: \(newValue ?? [])")
-            // Forward to original setter (implementations are swapped)
-            self.ik_protocolClasses = newValue
-        }
+
+        // Prepend FIRST — must run before _NSURLHTTPProtocol which would otherwise
+        // claim all http/https and prevent canInit from ever being called.
+        // Re-entry is prevented by InspectKitRequestMarker.isHandled on forwarded requests.
+        return [InspectKitURLProtocol.self] + original
     }
 }
