@@ -27,9 +27,22 @@ public struct InspectKitOverlay: View {
     /// Pass `nil` to use the default "network" SF Symbol.
     private let customIcon: UIImage?
 
-    public init(store: InspectKitStore? = nil, customIcon: UIImage? = nil) {
+    /// How the custom icon image is scaled inside its 28×28 frame.
+    /// `.fit` (default) keeps the full image visible; `.fill` crops to fill the frame.
+    private let imageContentMode: ContentMode
+
+    /// Background colour of the bubble circle.
+    /// Pass `nil` (default) to use the standard accent gradient.
+    private let bubbleColor: Color?
+
+    public init(store: InspectKitStore? = nil,
+                customIcon: UIImage? = nil,
+                imageContentMode: ContentMode = .fit,
+                bubbleColor: Color? = nil) {
         self.store = store ?? InspectKit.shared.store
         self.customIcon = customIcon
+        self.imageContentMode = imageContentMode
+        self.bubbleColor = bubbleColor
     }
 
     public var body: some View {
@@ -90,23 +103,31 @@ public struct InspectKitOverlay: View {
 
     private var bubble: some View {
         ZStack {
-            // Background circle
-            Circle()
-                .fill(
-                    LinearGradient(
-                        colors: [NIColor.accent, NIColor.accent.opacity(0.75)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing)
-                )
-                .frame(width: 52, height: 52)
-                .shadow(color: .black.opacity(0.4), radius: 10, x: 0, y: 4)
+            // Background circle — custom solid colour or default accent gradient
+            if let color = bubbleColor {
+                Circle()
+                    .fill(color)
+                    .frame(width: 52, height: 52)
+                    .shadow(color: .black.opacity(0.4), radius: 10, x: 0, y: 4)
+            } else {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [NIColor.accent, NIColor.accent.opacity(0.75)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing)
+                    )
+                    .frame(width: 52, height: 52)
+                    .shadow(color: .black.opacity(0.4), radius: 10, x: 0, y: 4)
+            }
 
             // Icon — custom image or default SF Symbol
             if let icon = customIcon {
                 Image(uiImage: icon)
                     .resizable()
-                    .scaledToFit()
+                    .aspectRatio(contentMode: imageContentMode)
                     .frame(width: 28, height: 28)
+                    .clipped()
                     .foregroundColor(.white)
             } else {
                 Image(systemName: "network")
