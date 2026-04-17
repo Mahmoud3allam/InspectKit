@@ -6,13 +6,24 @@ A zero-dependency, in-process network debugger for iOS. InspectKit intercepts ev
 
 ---
 
+## Screenshots
+
+<!-- Replace the paths below with your actual screenshot files once you add them to the repo -->
+
+| Dashboard | Request Detail | Speed Test |
+|:---------:|:--------------:|:----------:|
+| ![Dashboard](screenshots/dashboard.png) | ![Request Detail](screenshots/request_detail.png) | ![Speed Test](screenshots/speed_test.png) |
+
+---
+
 ## Features
 
 - **Automatic interception** — Works with `URLSession`, Alamofire, and any library built on top of them. No need to swap out your session or add middleware.
-- **Floating bubble overlay** — Draggable, dismissable debug bubble appears above your app. Tap to open the full dashboard.
+- **Floating bubble overlay** — Draggable, dismissable debug bubble. Fully customisable background colour and icon.
 - **Request / Response detail** — URL, method, status, headers, body (JSON pretty-printed, text, binary metadata), timing.
 - **Performance timeline** — DNS lookup, TCP connect, TLS handshake, request, response phases per request.
 - **Sensitive data redaction** — Passwords, tokens, and auth headers are masked by default. Toggle reveal in the UI with the eye button.
+- **Speed Test** — Measure ping, download, and upload speed against Cloudflare's global network, directly from the dashboard.
 - **Host filtering** — Whitelist or ignore specific domains.
 - **Environment tagging** — Label requests with a build variant (dev / staging / prod).
 - **Export** — Copy as cURL or export the full session as JSON.
@@ -194,6 +205,26 @@ YourNetworkLayer.shared.debugProtocolClasses = [InspectKit.urlProtocolClass]
 
 ---
 
+## Bubble Customisation
+
+```swift
+// Custom icon, fill content mode, and brand colour
+InspectKit.shared.installWindowOverlay(
+    in: windowScene,
+    customIcon: UIImage(named: "my_logo"),
+    imageContentMode: .fill,           // .fit (default) or .fill
+    bubbleColor: Color(red: 0.2, green: 0.6, blue: 1.0)
+)
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `customIcon` | `UIImage?` | `nil` | Image inside the bubble. `nil` = default network SF Symbol |
+| `imageContentMode` | `ContentMode` | `.fit` | `.fit` keeps full image visible; `.fill` crops to fill the circle |
+| `bubbleColor` | `Color?` | `nil` | Solid background colour. `nil` = default blue accent gradient |
+
+---
+
 ## Configuration
 
 All options have sensible defaults. Pass only what you need to change.
@@ -275,6 +306,26 @@ Tap the floating bubble to open the inspector. From there:
 
 Search and filter requests by text, state (all / active / completed / failed) or HTTP method.
 
+The **⚡ Speed Test** button in the top-right corner opens the connection speed tester.
+
+---
+
+## Speed Test
+
+Tap **⚡** in the dashboard nav bar to open the speed test screen.
+
+InspectKit measures three values against Cloudflare's global network:
+
+| Metric | How it's measured |
+|---|---|
+| **Ping** | Average of 3 × round-trip HEAD requests |
+| **Download** | 10 MB GET — bytes received ÷ elapsed time |
+| **Upload** | 2 MB POST — bytes sent ÷ elapsed time |
+
+Results are colour-coded: **green** ≥ 20 Mb/s · **orange** 5–20 Mb/s · **red** < 5 Mb/s (ping: green < 50 ms · orange < 100 ms).
+
+Speed test requests are excluded from the request list — they don't pollute your captured session data.
+
 ---
 
 ## Export
@@ -334,15 +385,13 @@ InspectKit.shared.present(from: self)
 InspectKit should never be active in App Store / production builds. The safest pattern:
 
 ```swift
-// In your target's build settings, DEBUG is defined automatically by Xcode.
-
 #if DEBUG
 InspectKit.shared.configure(InspectKitConfiguration(isEnabled: true))
 InspectKit.shared.start()
 #endif
 ```
 
-You can also set `isEnabled: false` at runtime (e.g. based on a feature flag) without removing the call sites:
+You can also gate on a runtime flag without removing call sites:
 
 ```swift
 InspectKit.shared.configure(

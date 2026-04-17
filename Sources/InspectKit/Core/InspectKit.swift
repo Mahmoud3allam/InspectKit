@@ -2,6 +2,7 @@ import Foundation
 
 #if canImport(UIKit)
 import UIKit
+import SwiftUI
 #endif
 
 /// Public facade for the Network Inspector module.
@@ -120,18 +121,36 @@ public final class InspectKit {
     /// Call once from `AppDelegate.application(_:didFinishLaunchingWithOptions:)`
     /// after calling `configure` and `start`.
     ///
-    /// - Parameter customIcon: Image shown inside the bubble. `nil` = default "network" SF Symbol.
-    public func installWindowOverlay(in window: UIWindow, customIcon: UIImage? = nil) {
-        InspectKitWindowOverlay.shared.install(in: window, customIcon: customIcon)
+    /// - Parameters:
+    ///   - customIcon: Image shown inside the bubble. `nil` = default "network" SF Symbol.
+    ///   - imageContentMode: How the custom icon is scaled. Default `.fit`.
+    ///   - bubbleColor: Background colour of the bubble. `nil` = default accent gradient.
+    public func installWindowOverlay(in window: UIWindow,
+                                     customIcon: UIImage? = nil,
+                                     imageContentMode: ContentMode = .fit,
+                                     bubbleColor: Color? = nil) {
+        InspectKitWindowOverlay.shared.install(in: window,
+                                               customIcon: customIcon,
+                                               imageContentMode: imageContentMode,
+                                               bubbleColor: bubbleColor)
     }
 
     /// Installs the floating bubble overlay into a UIWindowScene (SceneDelegate apps).
     ///
     /// Call once from `SceneDelegate.scene(_:willConnectTo:options:)`.
     ///
-    /// - Parameter customIcon: Image shown inside the bubble. `nil` = default "network" SF Symbol.
-    public func installWindowOverlay(in scene: UIWindowScene, customIcon: UIImage? = nil) {
-        InspectKitWindowOverlay.shared.install(in: scene, customIcon: customIcon)
+    /// - Parameters:
+    ///   - customIcon: Image shown inside the bubble. `nil` = default "network" SF Symbol.
+    ///   - imageContentMode: How the custom icon is scaled. Default `.fit`.
+    ///   - bubbleColor: Background colour of the bubble. `nil` = default accent gradient.
+    public func installWindowOverlay(in scene: UIWindowScene,
+                                     customIcon: UIImage? = nil,
+                                     imageContentMode: ContentMode = .fit,
+                                     bubbleColor: Color? = nil) {
+        InspectKitWindowOverlay.shared.install(in: scene,
+                                               customIcon: customIcon,
+                                               imageContentMode: imageContentMode,
+                                               bubbleColor: bubbleColor)
     }
 
     /// Removes the floating overlay window.
