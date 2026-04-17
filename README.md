@@ -1,4 +1,11 @@
-# InspectKit
+<div align="center">
+  <img src="screenshots/inspectkit-logo.png" alt="InspectKit" width="280" />
+  
+  ![iOS 13.0+](https://img.shields.io/badge/iOS-13.0%2B-blue?style=flat-square)
+  ![Swift 5.5+](https://img.shields.io/badge/Swift-5.5%2B-orange?style=flat-square)
+  ![License MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)
+  ![SPM](https://img.shields.io/badge/SPM-supported-brightgreen?style=flat-square)
+</div>
 
 A zero-dependency, in-process network debugger for iOS. InspectKit intercepts every HTTP/HTTPS request your app makes, captures request/response data, and surfaces it through a floating overlay — with **no changes to your networking code**.
 
