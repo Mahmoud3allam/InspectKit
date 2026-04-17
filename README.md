@@ -14,8 +14,6 @@ A zero-dependency, in-process network debugger for iOS. InspectKit intercepts ev
 |:---------:|:--------------:|:----------:|
 | ![Dashboard](screenshots/dashboard.png) | ![Request Detail](screenshots/request_detail.png) | ![Speed Test](screenshots/speed_test.png) |
 
-> **Adding screenshots:** Drop your `.png` files into a `screenshots/` folder at the repo root and the table above will render them automatically on GitHub. Recommended size: 390 × 844 px (iPhone 14 portrait).
-
 ---
 
 ## Features
