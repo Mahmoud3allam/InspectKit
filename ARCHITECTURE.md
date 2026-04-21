@@ -1,126 +1,183 @@
-# InspectKit — Technical Architecture Overview
+# InspectKit — Technical Architecture
 
 ## What It Is
 
-InspectKit is a zero-dependency, in-process network debugging tool for iOS apps. It intercepts HTTP/HTTPS traffic at the URL loading system layer, stores captured request/response records in memory, and surfaces them through a floating SwiftUI overlay — all without modifying any application networking code beyond the initial setup.
+A zero-dependency iOS debug toolkit with two independent products:
+
+| Product | Role |
+|---|---|
+| **InspectKit** | Read-only network inspector — captures every HTTP/HTTPS request and exposes it in a floating dashboard |
+| **InspectKitMock** | Network mocker — intercepts selected requests and returns configurable fake responses, errors, or delays |
+
+An internal target, **InspectKitCore**, holds all code shared between the two products. It is not exposed as a library product; consumers only see `InspectKit` and/or `InspectKitMock`.
 
 Minimum deployment target: **iOS 13**.
 
 ---
 
-## Layer Diagram
+## Package Layout
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                      Your App                           │
-│   Alamofire Session / URLSession / custom network layer │
-└───────────────────────┬─────────────────────────────────┘
-                        │  URLRequest
-                        ▼
-┌─────────────────────────────────────────────────────────┐
-│              URL Loading System (Foundation)            │
-│                                                         │
-│  protocolClasses = [InspectKitURLProtocol, ...]   │
-│                        │                               │
-│            canInit() → startLoading()                  │
-└───────────────────────┬─────────────────────────────────┘
-                        │
-          ┌─────────────▼──────────────┐
-          │  InspectKitURLProtocol│  ← Interception layer
-          │  (URLProtocol subclass)     │
-          └──────┬──────────┬──────────┘
-                 │          │
-    Mark request │          │ Forward unmarked copy
-    (handled=true│          │ to private forwardingSession
-    recordID=uuid)│         │ (protocolClasses = [] — no re-entry)
-                 │          ▼
-                 │  ┌──────────────────────────────┐
-                 │  │ InspectKitSessionDelegate│
-                 │  │ Proxy (URLSessionDataDelegate) │
-                 │  │                               │
-                 │  │ didReceive response ──────────┼──► forwardResponse()
-                 │  │ didReceive data ──────────────┼──► forwardData()
-                 │  │ didCompleteWithError ─────────┼──► forwardCompletion()
-                 │  │ didFinishCollecting metrics ──┼──► metricsHandler()
-                 │  └──────────────────────────────┘
-                 │
-                 │ (MainActor Task)
-                 ▼
-┌─────────────────────────────────────────────────────────┐
-│                  InspectKit (singleton)           │
-│  @MainActor                                             │
-│                                                         │
-│  store.insert(record)       ← beginInspection()         │
-│  flushBuffered(for: id)     ← drain any buffered data   │
-│  store.mutate(finishRecord) ← response/error applied    │
-│  store.mutate(attachMetrics)← timing phases applied     │
-└───────────────────────┬─────────────────────────────────┘
-                        │ @Published var records changes
-                        ▼
-┌─────────────────────────────────────────────────────────┐
-│                InspectKitStore                    │
-│  @MainActor  ObservableObject                           │
-│                                                         │
-│  records: [NetworkRequestRecord]   ← ring buffer (500)  │
-│  indexByID: [UUID: Int]            ← O(1) lookup        │
-│  pendingMutations buffer           ← race-condition safe│
-└───────────────────────┬─────────────────────────────────┘
-                        │ Combine @Published triggers SwiftUI
-                        ▼
-┌─────────────────────────────────────────────────────────┐
-│                      UI Layer                           │
-│                                                         │
-│  InspectKitWindowOverlay (PassthroughWindow)      │
-│    └── InspectKitOverlay (floating bubble)        │
-│          └── sheet → InspectKitDashboardView      │
-│                        └── NetworkRequestListView       │
-│                              └── NetworkRequestDetailView│
-│                                    ├── OverviewTab      │
-│                                    ├── RequestTab       │
-│                                    ├── ResponseTab      │
-│                                    ├── HeadersTab       │
-│                                    ├── TimelineView     │
-│                                    └── CurlPreviewView  │
-└─────────────────────────────────────────────────────────┘
+InspectKit (SPM package)
+├── InspectKitCore      [internal — not a product]
+│     Models, Redactor, CoreAutoCapture swizzle, MockHooks hook point,
+│     Theme tokens (NIColor/NIFont), shared utilities
+│
+├── InspectKit          [product]
+│     depends on InspectKitCore
+│     @_exported import InspectKitCore   ← re-exports Core types
+│     InspectKitURLProtocol (priority 100), InspectKitStore, UI
+│
+└── InspectKitMock      [product]
+      depends on InspectKitCore
+      InspectKitMockURLProtocol (priority 200), MockStore, UI
+```
+
+When only `InspectKit` is linked, the Mock layer is absent and `MockHooks.onHit` is `nil` — no overhead. When both are linked, Mock intercepts matching requests first; unmatched requests fall through to the Inspector layer and then to the real network.
+
+---
+
+## Module Dependency Graph
+
+```
+        ┌────────────────────┐
+        │   InspectKitCore   │  (internal, not a product)
+        │                    │
+        │  NetworkModels     │
+        │  Redactor          │
+        │  CoreAutoCapture   │
+        │  MockHooks         │
+        │  Theme (NIColor…)  │
+        │  Utilities         │
+        └──────┬─────────────┘
+               │ depends on
+       ┌───────┴────────┐
+       │                │
+       ▼                ▼
+┌─────────────┐  ┌──────────────────┐
+│ InspectKit  │  │  InspectKitMock  │
+│  (product)  │  │    (product)     │
+└─────────────┘  └──────────────────┘
 ```
 
 ---
 
-## Core Components
+## Layer Diagram — Combined Mode
 
-### 1. Interception — `InspectKitURLProtocol`
+```
+┌────────────────────────────────────────────────────────────────┐
+│                          Your App                              │
+│        URLSession / Alamofire / custom networking layer        │
+└──────────────────────────────┬─────────────────────────────────┘
+                               │  URLRequest
+                               ▼
+┌────────────────────────────────────────────────────────────────┐
+│               URL Loading System (Foundation)                  │
+│                                                                │
+│  protocolClasses = [InspectKitMockURLProtocol (200),          │
+│                     InspectKitURLProtocol     (100), ...]      │
+│                                                                │
+│  canInit() called in priority order ──────────────────────►   │
+└──────────────────────────────┬─────────────────────────────────┘
+                               │
+              ┌────────────────┴──────────────────┐
+              │                                   │
+        rule matched?                       no rule match
+              │                                   │
+              ▼                                   ▼
+┌─────────────────────────┐        ┌──────────────────────────┐
+│ InspectKitMockURLProtocol│        │  InspectKitURLProtocol   │
+│   priority 200           │        │  priority 100            │
+│   Synthesises response   │        │  Forwards to real network│
+│   (no outgoing task)     │        │  Streams response back   │
+│          │               │        │          │               │
+│   logHit()               │        │   inspectionID attached  │
+│   MockHooks.onHit?() ────┼──────► │   store.insert(record)   │
+│                          │   if   │                          │
+└──────────────────────────┘  both  └──────────────────────────┘
+                              active
+```
 
-The entry point for all captured traffic. Subclasses `URLProtocol`, which lets it sit in the URL loading pipeline and handle any HTTP/HTTPS request before it hits the network.
+---
 
-**Registration — two paths:**
+## InspectKitCore — Shared Infrastructure
 
-| Path | How | When to use |
-|---|---|---|
-| Global | `URLProtocol.registerClass(...)` called in `start()` | `URLSession.shared` and sessions whose config does not explicitly set `protocolClasses` |
-| Per-session | `config.installInspectKit()` inserts the class at index 0 of `protocolClasses` | Alamofire `Session`, or any custom `URLSession` with its own config |
+### CoreAutoCapture — Single Shared Swizzle
 
-The `isActive` static flag (protected by `NSLock`) is checked in `canInit()` first. If `stop()` has been called, the protocol refuses every request immediately — even if it is still present in a session's `protocolClasses`.
+Both protocols need to inject themselves into `URLSessionConfiguration.protocolClasses`. Two competing swizzles would chain unpredictably. `CoreAutoCapture` installs **one** swizzle on the first `register` call and maintains a priority-sorted class list.
 
-**Request lifecycle inside the protocol:**
+```swift
+public enum CoreAutoCapture {
+    public static func register(_ cls: AnyClass, priority: Int)
+    public static func unregister(_ cls: AnyClass)
+    static func injectedClasses() -> [AnyClass]   // sorted descending by priority
+}
+```
+
+Registration priorities:
+
+| Class | Priority |
+|---|---|
+| `InspectKitMockURLProtocol` | 200 |
+| `InspectKitURLProtocol` | 100 |
+
+The swizzled getter prepends `injectedClasses()` before any app-level classes already in the list, with deduplication. Mock (200) always precedes Inspector (100) so Mock's `canInit` is evaluated first.
+
+### MockHooks — Cross-Framework Bridge
+
+```swift
+public enum MockHooks {
+    public static var onHit: ((NetworkRequestRecord) -> Void)?
+}
+```
+
+`InspectKit.start()` installs a closure that calls `store.insert(record)` with `isMocked = true`. `InspectKit.stop()` nils it. `InspectKitMock` calls this hook after a rule fires; if the Inspector is not linked or not running, the hook is `nil` and this is a no-op.
+
+### NetworkRequestRecord — Shared Data Model
+
+```
+NetworkRequestRecord  (public struct, Codable, Sendable, Hashable)
+ ├─ id: UUID
+ ├─ sequence: Int
+ ├─ state: NetworkRequestState   — inProgress | completed | failed | cancelled
+ ├─ url / host / path / queryItems
+ ├─ method: HTTPMethod
+ ├─ requestHeaders / requestBody: CapturedBody
+ ├─ statusCode
+ ├─ responseHeaders / responseBody: CapturedBody
+ ├─ error: CapturedError?
+ ├─ startDate / endDate → durationMS (computed)
+ ├─ metrics: CapturedMetrics?    — DNS/TLS/connect/response phases
+ ├─ isMocked: Bool               — set true when delivered by Mock
+ └─ mockRuleName: String?        — name of the matching MockRule
+```
+
+`isMocked` and `mockRuleName` default to `false`/`nil` so all existing Inspector code compiles unchanged.
+
+---
+
+## InspectKit — Network Inspector
+
+### Request Lifecycle
 
 ```
 startLoading()
   │
   ├─ beginInspection(request)
   │    ├─ Generate UUID (recordID)
-  │    ├─ Schedule Task { @MainActor } → store.insert(record)
+  │    ├─ Task { @MainActor } → store.insert(pendingRecord)
   │    └─ Return UUID immediately (non-blocking)
   │
-  ├─ Mark forwarded request: handled=true, recordID=uuid
+  ├─ Tag forwarded request: handled=true, recordID=uuid
   │    (URLProtocol.setProperty — survives NSURLRequest copy)
   │
-  ├─ forwardingSession.dataTask(markedRequest).resume()
+  ├─ forwardingSession.dataTask(taggedRequest).resume()
   │    └─ forwardingSession has protocolClasses=[]
-  │       so canInit() will never fire for this inner request
+  │       so canInit() never fires for this inner request
   │
   └─ delegateProxy.register(self, for: task)
 
-                    [Network round-trip happens here]
+              [Network round-trip happens here]
 
 delegateProxy callbacks:
   didReceive response  → forwardResponse()  → client?.urlProtocol(didReceive:)
@@ -129,175 +186,250 @@ delegateProxy callbacks:
   │                       ├─ client?.urlProtocolDidFinishLoading / didFailWithError
   │                       └─ Task { @MainActor } → InspectKit.finishRecord()
   │
-  didFinishCollecting  → metricsHandler
-                          └─ Task { @MainActor } → InspectKit.attachMetrics()
+  didFinishCollecting  → Task { @MainActor } → InspectKit.attachMetrics()
 ```
 
-**Anti-recursion:** every outgoing request is tagged with `URLProtocol.setProperty(true, forKey: "com.networkinspector.handled")`. `canInit()` checks this tag first and returns `false` if present, ensuring the inner forwarding session never re-enters the protocol.
+Anti-recursion: every outgoing request is tagged with `URLProtocol.setProperty`. `canInit` checks this tag first and returns `false` if present.
+
+### InspectKitStore
+
+`@MainActor ObservableObject`. Ring buffer of `maxStoredRequests` (default 500) records with O(1) lookup via `indexByID: [UUID: Int]`.
+
+```
+insert(record)                       mutate(id:_:)
+  │                                    │
+  ├─ apply pendingMutations[id]         ├─ id found: mutate in-place (O(1))
+  ├─ records.insert(at: 0)             │
+  ├─ rebuildIndex()                    └─ id NOT found: store in pendingMutations[id]
+  ├─ trimIfNeeded()                       applied on next insert(id)
+  └─ schedulePersist()
+```
+
+`pendingMutations` prevents silent data loss when a cached response delivers completion before the insert Task runs.
 
 ---
 
-### 2. State Management — `InspectKitStore`
+## InspectKitMock — Network Mocker
 
-`@MainActor` `ObservableObject`. The single source of truth for all captured records.
+### Request Lifecycle
 
 ```
-insert(record)                        mutate(id:_:)
-  │                                     │
-  ├─ apply pendingMutations[id]         ├─ if id found: mutate in-place
-  ├─ records.insert(at: 0)             │  (records[idx] = updated)
-  ├─ rebuildIndex()                     │
-  ├─ trimIfNeeded() — cap at 500        └─ if id NOT found:
-  └─ schedulePersist()                     store in pendingMutations[id]
-                                           applied on next insert(id)
+InspectKitMockURLProtocol.canInit(request)
+  │
+  ├─ isActive == false → return false (fall through)
+  ├─ request already handled → return false
+  └─ RuleMatcher.shared.firstMatch(for: request) != nil → return true
+       └─ (thread-safe NSLock snapshot — no actor hop required)
+
+startLoading()
+  │
+  ├─ rule = RuleMatcher.shared.firstMatch(for: request)
+  │
+  ├─ DispatchQueue.global.asyncAfter(deadline: .now() + rule.delay)
+  │
+  └─ deliver(rule:)
+       │
+       ├─ .ok(status, headers, body)
+       │    ├─ resolve body (text/json/data/bundleFile)
+       │    ├─ client?.urlProtocol(didReceive: HTTPURLResponse)
+       │    ├─ client?.urlProtocol(didLoad: data)
+       │    ├─ client?.urlProtocolDidFinishLoading()
+       │    ├─ Task { @MainActor } → store.recordHit(hit)
+       │    └─ MockHooks.onHit?(mockedRecord)   [if Inspector is running]
+       │
+       └─ .failure(domain, code, userInfo)
+            ├─ client?.urlProtocol(didFailWithError: NSError)
+            ├─ Task { @MainActor } → store.recordHit(hit)
+            └─ MockHooks.onHit?(mockedRecord)
 ```
 
-**Why `pendingMutations`:** `finishRecord` and `attachMetrics` arrive via MainActor Tasks created on background threads. Although Task ordering on a serial actor is FIFO, a response served from cache can deliver its delegate callbacks before the insert Task has been enqueued. The buffer ensures the completion data is never silently dropped.
+### RuleMatcher — Thread-Safety Bridge
 
-**Index:** `indexByID: [UUID: Int]` maps each record's UUID to its position in `records`. All `mutate` calls are O(1). The index is rebuilt entirely on every insert or trim — acceptable given the 500-record cap.
+URLProtocol's `canInit` and `startLoading` run on arbitrary threads. `MockStore` is `@MainActor`. Direct calls would require a hop and `await`, which URLProtocol's synchronous API cannot accommodate.
 
-**Filtering:** `filtered(query:stateFilter:methodFilter:)` is a pure function over `records`. It is recomputed by SwiftUI on every store publish, so no separate filtered-list state is needed.
+`RuleMatcher` is a `NSLock`-protected `@unchecked Sendable` singleton. `MockStore` pushes a snapshot on every mutation; URLProtocol reads from this snapshot without any actor hop.
+
+```swift
+final class RuleMatcher: @unchecked Sendable {
+    static let shared = RuleMatcher()
+    private let lock = NSLock()
+    private var _rules: [MockRule] = []
+    private var _scenarioRuleIDs: [UUID]? = nil
+    var logToInspectKit: Bool = true
+
+    func update(rules: [MockRule], scenarioRuleIDs: [UUID]?, logToInspectKit: Bool)
+    func firstMatch(for request: URLRequest) -> MockRule?
+}
+```
+
+When a scenario is active, only rules whose IDs appear in `scenarioRuleIDs` are considered, in scenario order. With no active scenario, all enabled rules are evaluated in creation order.
+
+### MockStore
+
+`@MainActor ObservableObject`. Source of truth for rules, scenarios, and the rolling 100-entry hit log. Every mutation saves to `UserDefaults` (JSON-encoded) and pushes a new snapshot to `RuleMatcher.shared`.
+
+**Array mutation pattern:** All methods that modify individual elements use explicit full reassignment rather than subscript mutation (`rules[i] = x`). Subscript mutation goes through Swift's `_modify` accessor, which does not reliably fire `objectWillChange` on all Swift 5.5 targets. The safe form is:
+
+```swift
+var updated = rules
+updated[idx] = newRule
+rules = updated          // setter always fires objectWillChange
+```
+
+**Initialisation:** `pushToMatcher()` is not called from `init()` to prevent a static singleton re-entrancy trap — `MockStore` is created inside `InspectKitMock.shared`'s own init, so `shared` is not yet accessible. The initial push is deferred to `InspectKitMock.start()` via `store.initialPush(logToInspectKit:)`.
 
 ---
 
-### 3. Data Model — `NetworkRequestRecord`
+## Thread Safety Model
 
-A value type (`struct`) that is `Codable`, `Sendable`, and `Hashable`. It carries the full lifecycle of one HTTP transaction:
-
-```
-NetworkRequestRecord
- ├─ id: UUID                  — correlates URLProtocol ↔ store ↔ UI
- ├─ sequence: Int             — monotonic counter for display order
- ├─ state: NetworkRequestState — inProgress | completed | failed | cancelled
- ├─ url / host / path / queryItems
- ├─ method: HTTPMethod
- ├─ requestHeaders / requestBody: CapturedBody
- ├─ statusCode
- ├─ responseHeaders / responseBody: CapturedBody
- ├─ error: CapturedError?
- ├─ startDate / endDate → durationMS (computed)
- └─ metrics: CapturedMetrics?  — DNS/TLS/connect/response phase timings
-```
-
-`CapturedBody` holds the raw `Data`, a text preview, byte count, content type, and a truncation flag. Body capture is gated by `captureRequestBodies` / `captureResponseBodies` flags in configuration and capped at `maxCapturedBodyBytes` (default 1 MB).
+| Component | Actor / Queue |
+|---|---|
+| `InspectKit` | `@MainActor` |
+| `InspectKitStore` | `@MainActor` |
+| `InspectKitMock` | `@MainActor` |
+| `MockStore` | `@MainActor` |
+| `InspectKitURLProtocol` callbacks | URL loading system background thread |
+| `InspectKitMockURLProtocol` callbacks | URL loading system background thread |
+| `InspectKitSessionDelegateProxy` callbacks | URLSession delegate queue (background) |
+| `InspectKitURLProtocol.isActive` | `NSLock`-protected static |
+| `InspectKitMockURLProtocol.isActive` | `NSLock`-protected static |
+| `CoreAutoCapture` class registry | `NSLock`-protected |
+| `RuleMatcher` rule snapshot | `NSLock`-protected (`@unchecked Sendable`) |
+| Background → MainActor mutations | `Task { @MainActor in }` |
+| Mock response delivery delay | `DispatchQueue.global(qos: .userInitiated).asyncAfter` |
 
 ---
 
-### 4. Redaction — `InspectKitRedactor`
+## UI Architecture
 
-Applied at display and export time, never at capture time (raw data is always stored). Walks header dictionaries and JSON bodies, replaces values whose keys match the redacted-key sets (case-insensitive) with `██ REDACTED ██`.
+### InspectKit Dashboard
+
+```
+InspectKitWindowOverlay (PassthroughWindow — hitTest returns nil for transparent areas)
+  └── InspectKitOverlay (52pt draggable Circle, live badge count)
+        └── .sheet → InspectKitDashboardView
+                        └── InspectKitRequestListView
+                              └── InspectKitRequestDetailView
+                                    ├── OverviewTab
+                                    ├── RequestTab
+                                    ├── ResponseTab
+                                    ├── HeadersTab
+                                    ├── TimelineView (URLSessionTaskMetrics phases)
+                                    └── CurlPreviewView
+```
+
+Records with `isMocked == true` render a cyan **MOCKED** capsule badge in `InspectKitRequestListView`.
+
+### InspectKitMock Dashboard
+
+#### Presentation
+
+**SwiftUI** — attach `.inspectKitMock()` to the root view; the modifier listens for a `NotificationCenter` trigger so `presentDashboard()` works from anywhere:
+
+```swift
+ContentView().inspectKitMock()
+InspectKitMock.shared.presentDashboard()   // e.g. shake gesture
+```
+
+**UIKit** — call `presentDashboard(from:)` from any `UIViewController`; it wraps `MockDashboardView` in a `UIHostingController` and presents it full-screen:
+
+```swift
+InspectKitMock.shared.presentDashboard(from: self)
+```
+
+#### View Hierarchy
+
+```
+MockDashboardView
+  ├─ Summary bar (total rules, enabled, hits, active scenario)
+  ├─ MockRuleListView (enable toggle, method badge, hit count, delay indicator)
+  │    └─ pencil button → MockRuleEditorView (via EditSession sheet)
+  ├─ MockRuleEditorView (create / edit)
+  │    ├─ Identity  — name, enabled toggle
+  │    ├─ Match     — host / path (any|equals|contains|prefix|suffix|regex),
+  │    │              method, body-contains
+  │    ├─ Response  — OK (status stepper, headers, body: none/json/text)
+  │    │              or Failure (domain, code)
+  │    └─ Delay     — 0–10s slider
+  ├─ ScenarioPickerView (create named groups, activate with one tap)
+  └─ MockHitsLogView (rolling 100, reverse-chronological)
+```
+
+#### EditSession — Sheet Identity
+
+SwiftUI's `sheet(item:)` uses the item's `Identifiable.id` to track identity. When a rule is edited and the sheet is re-opened for the same rule (same UUID), SwiftUI can reuse the existing view, leaving `@State` variables stale from the previous session.
+
+`MockRuleListView` wraps each edit in a private `EditSession` struct whose `id` is a freshly generated `UUID` on every open:
+
+```swift
+private struct EditSession: Identifiable {
+    let id = UUID()   // unique per presentation — forces fresh @State
+    let rule: MockRule
+}
+```
+
+`sheet(item: $editSession)` sees a new identity on every open and always creates a fresh `MockRuleEditorView` with correctly initialised `@State`.
+
+All InspectKitMock UI files are wrapped in `#if canImport(UIKit)` for macOS SPM build compatibility. Multi-line body input uses a `UIViewRepresentable` wrapping `UITextView` (`TextEditor` is iOS 14+).
+
+---
+
+## Setup Sequence — Combined Mode
+
+```
+App launch
+  │
+  ├─ InspectKit.shared.configure(InspectKitConfiguration(environmentName: "dev"))
+  │
+  ├─ InspectKit.shared.start()
+  │    ├─ InspectKitURLProtocol.isActive = true
+  │    ├─ URLProtocol.registerClass(InspectKitURLProtocol.self)
+  │    ├─ CoreAutoCapture.register(InspectKitURLProtocol.self, priority: 100)
+  │    │    └─ installs shared URLSessionConfiguration swizzle on first call
+  │    └─ MockHooks.onHit = { record in store.insert(record) }
+  │
+  ├─ InspectKitMock.shared.start()
+  │    ├─ InspectKitMockURLProtocol.isActive = true
+  │    ├─ URLProtocol.registerClass(InspectKitMockURLProtocol.self)
+  │    ├─ CoreAutoCapture.register(InspectKitMockURLProtocol.self, priority: 200)
+  │    └─ store.initialPush(logToInspectKit: true)
+  │         └─ RuleMatcher.shared.update(...)
+  │
+  ├─ InspectKit.shared.installWindowOverlay(in: windowScene)
+  │    └─ Creates PassthroughWindow → hosts InspectKitOverlay
+  │
+  └─ ContentView().inspectKitMock()
+       └─ Attaches MockDashboardView sheet to SwiftUI root view
+```
+
+From this point:
+- A request matching a mock rule → synthesised response → `MockHooks.onHit` → Inspector shows it with **MOCKED** pill.
+- An unmatched request → Mock's `canInit` returns `false` → Inspector captures and forwards it normally.
+- `URLSessionConfiguration.protocolClasses` getter (swizzled once by `CoreAutoCapture`) always returns `[MockURLProtocol(200), InspectKitURLProtocol(100), …original…]`.
+
+---
+
+## Redaction
+
+Applied at display and export time, never at capture time (raw data is always stored). `InspectKitRedactor` walks header dictionaries and JSON bodies, replacing values whose keys match the configured set (case-insensitive) with `██ REDACTED ██`.
 
 Default redacted header keys: `Authorization`, `Cookie`, `Set-Cookie`, `X-API-Key`, `X-Auth-Token`.  
 Default redacted body keys: `token`, `access_token`, `refresh_token`, `password`, `secret`, `api_key`.
 
 ---
 
-### 5. Configuration — `InspectKitConfiguration`
+## Export
 
-A plain `struct` (`Sendable`) passed to `InspectKit.configure(_:)` before `start()`. Key fields:
+Two formats available from `InspectKit`:
 
-| Field | Default | Purpose |
-|---|---|---|
-| `isEnabled` | `true` | Master kill-switch |
-| `allowedHosts` | `[]` (all) | Whitelist — if non-empty, only matching hosts are captured |
-| `ignoredHosts` | `[]` | Blacklist — matching hosts are always skipped |
-| `captureRequestBodies` | `true` | Store request body bytes |
-| `captureResponseBodies` | `true` | Store response body bytes |
-| `captureMetrics` | `true` | Store `URLSessionTaskMetrics` timing phases |
-| `maxCapturedBodyBytes` | 1 MB | Truncation limit per body |
-| `maxStoredRequests` | 500 | Ring buffer size |
-| `persistToDisk` | `false` | JSON snapshot to Caches directory |
-
-`shouldCapture(host:)` is evaluated on the MainActor inside `beginInspection` before the record is inserted. If it returns `false`, no record is created, but the request is still forwarded transparently.
+- **cURL** — reconstructs a `curl` command from the captured request; redaction applied before generation.
+- **JSON session** — `JSONEncoder` (ISO 8601 dates, Base64 body data) written to the Caches directory and presented via `UIActivityViewController`.
 
 ---
 
-### 6. UI Layer
+## Known Limitations
 
-**Window overlay:**  
-`InspectKitWindowOverlay` creates a `PassthroughWindow` — a `UIWindow` subclass that overrides `hitTest(_:with:)` to return `nil` for touches on transparent areas. This allows the floating bubble to sit above the entire app without stealing touches from the app's own UI.
-
-**Floating bubble (`InspectKitOverlay`):**  
-A 52 pt draggable `Circle` rendered inside the passthrough window. Observes `store.activeCount` and `store.failureCount` to show a live indicator badge. Tapping presents the dashboard as a `.sheet`.
-
-**Dashboard (`InspectKitDashboardView`):**  
-`@ObservedObject var store`. Drives summary cards, search, segmented filter, and method-chip filter entirely from computed properties over `store.records` — no local copy. Re-renders automatically on every `@Published` change.
-
-**Detail (`NetworkRequestDetailView`):**  
-Custom tab bar (scrollable `HStack` of `Button`s) drives `@State var selectedTab`. Each tab is a separate `View` struct, rendered with `@ViewBuilder` switch. Tabs share a reference to the same `store` so live-updating requests (still in `.inProgress`) continue to update while the detail screen is open.
-
----
-
-### 7. Export — `InspectKitExporter`
-
-Two export formats:
-
-- **cURL:** reconstructs a `curl` shell command from the captured request headers and body. Sensitive values are redacted before generation.
-- **JSON session file:** encodes the full `[NetworkRequestRecord]` array with `JSONEncoder` (ISO 8601 dates, Base64 body data) and writes it to the Caches directory. Presented via `UIActivityViewController`.
-
----
-
-### 8. Thread Safety Model
-
-| Component | Actor / Queue |
-|---|---|
-| `InspectKit` | `@MainActor` |
-| `InspectKitStore` | `@MainActor` |
-| `InspectKitURLProtocol` (startLoading, stopLoading) | URL loading system background thread |
-| `InspectKitSessionDelegateProxy` callbacks | Delegate queue (background) |
-| `InspectKitURLProtocol.isActive` flag | `NSLock`-protected static |
-| `delegateProxy.protocolsByTask` dictionary | `NSLock`-protected |
-| All store/inspector mutations from background threads | Dispatched via `Task { @MainActor in }` |
-
-The `forwardingSession` delegate queue is `nil` (system-managed). The `delegateProxy` uses an `NSLock` to protect its `[Int: InspectKitURLProtocol]` task registry, which is written from `startLoading` (URL loading thread) and read/written from delegate callbacks (delegate queue).
-
----
-
-### 9. Alamofire / Custom Session Integration
-
-`URLProtocol.registerClass` (called by `start()`) affects `URLSession.shared` and sessions whose configuration does not explicitly set `protocolClasses`. For Alamofire sessions or any session with a custom `URLSessionConfiguration`, the protocol class must be injected explicitly:
-
-```swift
-// In the network layer module (no import of InspectKit needed)
-public var debugProtocolClasses: [AnyClass] = []
-
-private lazy var session: Session = {
-    let config = URLSessionConfiguration.default
-    var classes = config.protocolClasses ?? []
-    classes.insert(contentsOf: debugProtocolClasses, at: 0)
-    config.protocolClasses = classes
-    return Session(configuration: config, interceptor: MyInterceptor())
-}()
-
-// In the app target (imports both modules)
-#if DEBUG
-InspectKit.shared.start()
-NetworkClient.shared.debugProtocolClasses = [InspectKit.urlProtocolClass]
-#endif
-```
-
-The inspector sits **below** Alamofire's interceptor layer. Interceptors (auth adapters, retry logic, token refresh) run first and produce the final `URLRequest`. The inspector sees and records that final request, leaving Alamofire's behavior completely unaffected.
-
----
-
-### 10. Setup Sequence
-
-```
-App launch
-  │
-  ├─ InspectKit.shared.configure(.init(environmentName: "dev"))
-  │    └─ Creates new Store, Redactor, Exporter instances
-  │
-  ├─ InspectKit.shared.start()
-  │    ├─ Sets InspectKitURLProtocol.isActive = true
-  │    └─ URLProtocol.registerClass(InspectKitURLProtocol.self)
-  │
-  ├─ SessionManager.shared.debugProtocolClasses = [InspectKit.urlProtocolClass]
-  │    └─ Stored; applied when the lazy Session is first accessed
-  │
-  ├─ InspectKit.shared.installWindowOverlay(in: window / scene)
-  │    └─ Creates PassthroughWindow → hosts InspectKitOverlay
-  │
-  └─ App is ready. All HTTP/HTTPS requests through the monitored session
-       are now captured, stored, and visible in the floating overlay.
-```
+- `URLSessionWebSocketTask` — not intercepted by either protocol.
+- Background sessions (`URLSessionConfiguration.background(_:)`) — tasks not captured.
+- SSL pinning in the app's own `URLSessionDelegate` — unaffected by InspectKit; uses system trust chain.
+- `InspectKitMock` — does not mock WebSocket, SSE, or background sessions.

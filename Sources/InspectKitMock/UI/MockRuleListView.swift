@@ -4,7 +4,7 @@ import InspectKitCore
 
 struct MockRuleListView: View {
     @ObservedObject var store: MockStore
-    @State private var editingRule: MockRule?
+    @State private var editSession: EditSession?
 
     var body: some View {
         VStack(spacing: 6) {
@@ -14,14 +14,14 @@ struct MockRuleListView: View {
                 ForEach(store.rules) { rule in
                     MockRuleRow(rule: rule,
                                 onToggle: { store.setEnabled(id: rule.id, enabled: !rule.isEnabled) },
-                                onEdit:   { editingRule = rule },
+                                onEdit:   { editSession = EditSession(rule: rule) },
                                 onDelete: { store.remove(id: rule.id) })
                 }
             }
         }
         .padding(.horizontal, 12)
-        .sheet(item: $editingRule) { rule in
-            MockRuleEditorView(store: store, rule: rule, onDismiss: { editingRule = nil })
+        .sheet(item: $editSession) { session in
+            MockRuleEditorView(store: store, rule: session.rule, onDismiss: { editSession = nil })
         }
     }
 
@@ -42,6 +42,11 @@ struct MockRuleListView: View {
         .frame(maxWidth: .infinity)
         .padding(.top, 60)
     }
+}
+
+private struct EditSession: Identifiable {
+    let id = UUID()   // new UUID each open — forces fresh @State in the editor
+    let rule: MockRule
 }
 
 private struct MockRuleRow: View {

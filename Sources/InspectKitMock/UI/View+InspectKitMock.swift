@@ -29,9 +29,21 @@ private struct InspectKitMockModifier: ViewModifier {
 
 public extension InspectKitMock {
     /// Opens the mock dashboard programmatically (e.g. from a shake gesture).
+    /// Use this when the `.inspectKitMock()` SwiftUI modifier is attached to your root view.
     func presentDashboard() {
         NotificationCenter.default.post(name: Notification.Name("InspectKitMock.PresentDashboard"),
                                         object: nil)
+    }
+
+    /// Presents the mock dashboard from a UIViewController (UIKit apps).
+    /// Creates a UIHostingController wrapping MockDashboardView and presents it modally.
+    func presentDashboard(from viewController: UIViewController) {
+        let dashboard = MockDashboardView(store: store) {
+            viewController.presentedViewController?.dismiss(animated: true)
+        }
+        let host = UIHostingController(rootView: dashboard)
+        host.modalPresentationStyle = .fullScreen
+        viewController.present(host, animated: true)
     }
 }
 

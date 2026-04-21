@@ -15,7 +15,16 @@ public final class MockStore: ObservableObject {
         self.persistence = persistence
         self.rules     = persistence.loadRules()
         self.scenarios = persistence.loadScenarios()
-        pushToMatcher()
+        // Don't call pushToMatcher() here — InspectKitMock.shared isn't ready yet.
+        // start() performs the initial push after shared is fully initialised.
+    }
+
+    /// Called by InspectKitMock.start() to populate RuleMatcher with the initial snapshot.
+    func initialPush(logToInspectKit: Bool) {
+        let activeScenario = scenarios.first(where: { $0.isActive })
+        RuleMatcher.shared.update(rules: rules,
+                                  scenarioRuleIDs: activeScenario?.ruleIDs,
+                                  logToInspectKit: logToInspectKit)
     }
 
     // MARK: - Rule mutations
@@ -28,7 +37,9 @@ public final class MockStore: ObservableObject {
 
     public func update(_ rule: MockRule) {
         guard let idx = rules.firstIndex(where: { $0.id == rule.id }) else { return }
-        rules[idx] = rule
+        var updated = rules
+        updated[idx] = rule
+        rules = updated
         persistence.saveRules(rules)
         pushToMatcher()
     }
@@ -41,7 +52,9 @@ public final class MockStore: ObservableObject {
 
     public func setEnabled(id: UUID, enabled: Bool) {
         guard let idx = rules.firstIndex(where: { $0.id == id }) else { return }
-        rules[idx].isEnabled = enabled
+        var updated = rules
+        updated[idx].isEnabled = enabled
+        rules = updated
         persistence.saveRules(rules)
         pushToMatcher()
     }
@@ -87,8 +100,10 @@ public final class MockStore: ObservableObject {
         hits.insert(hit, at: 0)
         if hits.count > maxHits { hits.removeLast(hits.count - maxHits) }
         if let idx = rules.firstIndex(where: { $0.id == hit.ruleID }) {
-            rules[idx].hitCount += 1
-            rules[idx].lastHitAt = hit.date
+            var updated = rules
+            updated[idx].hitCount += 1
+            updated[idx].lastHitAt = hit.date
+            rules = updated
             persistence.saveRules(rules)
             pushToMatcher()
         }

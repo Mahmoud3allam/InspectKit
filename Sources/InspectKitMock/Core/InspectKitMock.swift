@@ -44,6 +44,7 @@ public final class InspectKitMock {
         URLProtocol.registerClass(InspectKitMockURLProtocol.self)
         MockAutoCapture.install()
         isRunning = true
+        store.initialPush(logToInspectKit: configuration.logToInspectKit)
     }
 
     public func stop() {
