@@ -1,3 +1,4 @@
+#if canImport(UIKit)
 import SwiftUI
 
 struct NetworkRequestListView: View {
@@ -32,6 +33,14 @@ private struct RequestRow: View {
                 StatusBadge(code: record.statusCode,
                             inProgress: record.state == .inProgress,
                             failed: record.isFailure)
+                if record.isMocked {
+                    Text("MOCKED")
+                        .font(NIFont.badge)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(NIColor.accentCyan))
+                }
                 Spacer()
                 Text(DateFormatter.networkInspectorTime.string(from: record.startDate))
                     .font(NIFont.monoSmall)
@@ -104,3 +113,5 @@ private struct EmptyStateView: View {
         .frame(maxWidth: .infinity)
     }
 }
+
+#endif // canImport(UIKit)

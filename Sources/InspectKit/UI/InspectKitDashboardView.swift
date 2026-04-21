@@ -1,3 +1,4 @@
+#if canImport(UIKit)
 import SwiftUI
 
 public struct InspectKitDashboardView: View {
@@ -145,3 +146,5 @@ private struct MethodChip: View {
         .buttonStyle(PlainButtonStyle())
     }
 }
+
+#endif // canImport(UIKit)

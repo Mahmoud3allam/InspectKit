@@ -1,3 +1,4 @@
+#if canImport(UIKit)
 import SwiftUI
 
 struct HeadersView: View {
@@ -63,3 +64,5 @@ private struct HeaderRow: View {
         .padding(.vertical, 8)
     }
 }
+
+#endif // canImport(UIKit)

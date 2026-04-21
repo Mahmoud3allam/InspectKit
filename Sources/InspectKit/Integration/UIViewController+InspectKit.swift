@@ -1,3 +1,4 @@
+#if canImport(UIKit)
 import UIKit
 import SwiftUI
 
@@ -49,3 +50,5 @@ public extension UINavigationController {
         pushViewController(vc, animated: animated)
     }
 }
+
+#endif // canImport(UIKit)

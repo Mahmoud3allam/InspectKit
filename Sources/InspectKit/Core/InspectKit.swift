@@ -1,4 +1,5 @@
 import Foundation
+@_exported import InspectKitCore
 
 #if canImport(UIKit)
 import UIKit
@@ -46,12 +47,17 @@ public final class InspectKit {
         URLProtocol.registerClass(InspectKitURLProtocol.self)
         InspectKitAutoCapture.install()
         isRunning = true
+        // Allow InspectKitMock to log mocked requests into this store
+        MockHooks.onHit = { [weak self] record in
+            self?.store.insert(record)
+        }
     }
 
     public func stop() {
         guard isRunning else { return }
         InspectKitURLProtocol.isActive = false
         URLProtocol.unregisterClass(InspectKitURLProtocol.self)
+        MockHooks.onHit = nil
         isRunning = false
     }
 
@@ -367,24 +373,3 @@ public final class InspectKit {
     }
 }
 
-enum BodyDetection {
-    static func kind(for contentType: String) -> BodyKind {
-        let ct = contentType.lowercased()
-        if ct.isEmpty { return .none }
-        if ct.contains("json") { return .json }
-        if ct.contains("multipart") { return .multipart }
-        if ct.contains("x-www-form-urlencoded") { return .form }
-        if ct.hasPrefix("text/") { return .text }
-        if ct.contains("xml") || ct.contains("javascript") || ct.contains("html") || ct.contains("csv") { return .text }
-        if ct.hasPrefix("image/") { return .image }
-        return .binary
-    }
-}
-
-extension Dictionary where Key == String, Value == String {
-    func firstValueCaseInsensitive(for key: String) -> String? {
-        let lower = key.lowercased()
-        for (k, v) in self where k.lowercased() == lower { return v }
-        return nil
-    }
-}

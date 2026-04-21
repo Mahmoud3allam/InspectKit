@@ -1,3 +1,4 @@
+#if canImport(UIKit)
 import SwiftUI
 
 // MARK: - Local colour palette
@@ -357,3 +358,5 @@ private struct HistoryRow: View {
         return f.string(from: record.date)
     }
 }
+
+#endif // canImport(UIKit)

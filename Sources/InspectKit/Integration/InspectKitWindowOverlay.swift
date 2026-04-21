@@ -1,3 +1,4 @@
+#if canImport(UIKit)
 import UIKit
 import SwiftUI
 
@@ -175,3 +176,5 @@ final class InspectKitBubbleTracker {
         return dx * dx + dy * dy <= hitRadius * hitRadius
     }
 }
+
+#endif // canImport(UIKit)

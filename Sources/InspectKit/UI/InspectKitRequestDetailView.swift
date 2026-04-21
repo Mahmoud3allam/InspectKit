@@ -1,3 +1,4 @@
+#if canImport(UIKit)
 import SwiftUI
 
 struct NetworkRequestDetailView: View {
@@ -307,3 +308,5 @@ private struct ErrorCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
+
+#endif // canImport(UIKit)

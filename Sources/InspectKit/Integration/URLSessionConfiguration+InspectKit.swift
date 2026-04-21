@@ -1,3 +1,4 @@
+#if canImport(UIKit)
 import Foundation
 
 public extension URLSessionConfiguration {
@@ -45,3 +46,5 @@ public extension URLSessionConfiguration {
         return self
     }
 }
+
+#endif // canImport(UIKit)

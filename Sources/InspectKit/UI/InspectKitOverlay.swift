@@ -1,3 +1,4 @@
+#if canImport(UIKit)
 import SwiftUI
 
 /// A floating, draggable debug bubble that opens the network inspector dashboard.
@@ -172,3 +173,5 @@ public struct InspectKitOverlay: View {
         return min(max(y, minY), maxY)
     }
 }
+
+#endif // canImport(UIKit)

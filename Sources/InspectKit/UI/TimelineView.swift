@@ -1,3 +1,4 @@
+#if canImport(UIKit)
 import SwiftUI
 
 struct TimelineView: View {
@@ -114,3 +115,5 @@ struct TimelineView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
+
+#endif // canImport(UIKit)
